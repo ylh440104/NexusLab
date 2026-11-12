@@ -11,6 +11,7 @@
     "build:webui": "pnpm --filter webui build",
     "build:mcp": "pnpm --filter @nexuslab/mcp build",
     "build:all": "pnpm --filter @nexuslab/core build:all && pnpm --filter @nexuslab/sdk build && pnpm --filter @nexuslab/mcp build && pnpm --filter @nexuslab/ui build && pnpm --filter webui build",
+    "check:release-layout": "node tools/check-release-layout.mjs",
     "dev": "pnpm --filter @nexuslab/core dev",
     "dev:mode": "cd dist && cross-env NEXUSLAB_DEV_MODE=1 NEXUSLAB_DEV_WEBUI=1 node index.mjs",
     "dev:web": "pnpm --filter webui dev",
