@@ -1,0 +1,51 @@
+{
+  "license": "GPL-2.0",
+  "name": "nexuslab-monorepo",
+  "version": "2.4.2",
+  "description": "NexusLab monorepo workspace (pnpm)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter @nexuslab/core build",
+    "build:sdk": "pnpm --filter @nexuslab/sdk build",
+    "build:webui": "pnpm --filter webui build",
+    "build:mcp": "pnpm --filter @nexuslab/mcp build",
+    "build:all": "pnpm --filter @nexuslab/core build:all && pnpm --filter @nexuslab/sdk build && pnpm --filter @nexuslab/mcp build && pnpm --filter @nexuslab/ui build && pnpm --filter webui build",
+    "dev": "pnpm --filter @nexuslab/core dev",
+    "dev:mode": "cd dist && cross-env NEXUSLAB_DEV_MODE=1 NEXUSLAB_DEV_WEBUI=1 node index.mjs",
+    "dev:web": "pnpm --filter webui dev",
+    "test": "pnpm --filter=\"./packages/**\" -r --no-bail --if-present test",
+    "test:core": "pnpm --filter @nexuslab/core test",
+    "test:watch": "pnpm --filter @nexuslab/core test:watch",
+    "test:common": "pnpm --filter @nexuslab/common test",
+    "test:all": "pnpm test",
+    "test:native": "pnpm --filter=\"./packages/**\" -r --if-present test:native",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "eslint --config eslint.format.config.ts --fix \"**/*.{ts,tsx,mts,cts}\" && prettier --write \"**/*.{ts,tsx,mts,cts}\"",
+    "format:check": "eslint --config eslint.format.config.ts \"**/*.{ts,tsx,mts,cts}\" && prettier --check \"**/*.{ts,tsx,mts,cts}\"",
+    "start": "node dist/index.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@stylistic/eslint-plugin": "5.10.0",
+    "@vitest/coverage-istanbul": "4.1.12",
+    "@vitest/coverage-v8": "4.1.12",
+    "cross-env": "^10.1.0",
+    "eslint": "^10.2.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.5.0",
+    "jiti": "^2.6.1",
+    "prettier": "3.9.10",
+    "typescript": "catalog:",
+    "typescript-eslint": "^8.58.2"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": "^24.22.1 || >=26.12.1",
+    "pnpm": "11.25.0"
+  }
+}
