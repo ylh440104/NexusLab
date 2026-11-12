@@ -4,7 +4,7 @@
     "name": "MotricSeven",
     "email": "motricseven@gmail.com"
   },
-  "version": "2.4.3",
+  "version": "2.4.4",
   "description": "TypeScript SDK for NexusLab OneBot HTTP and WebSocket transports",
   "keywords": [
     "nexuslab",

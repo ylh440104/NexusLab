@@ -1,7 +1,7 @@
 {
   "license": "GPL-2.0",
   "name": "@nexuslab/runtime",
-  "version": "2.4.3",
+  "version": "2.4.4",
   "private": true,
   "type": "module",
   "main": "index.mjs",
