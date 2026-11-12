@@ -191,60 +191,52 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
 
-  # Triggers the Docker image build on NexusLab.Docker.Framework once the
-  # GitHub Release (and its per-arch tarballs) is published, so the Docker
-  # workflow can pull the matching `NexusLab-<tag>-linux-<arch>-lite.tar.gz`
-  # asset and bake it into the container.
-  #
-  # Chained as a job dependency rather than via `on: release: published`
-  # because workflows triggered by GITHUB_TOKEN cannot fire downstream
-  # workflow events (GitHub anti-loop safeguard). Doing it as `needs: release`
-  # keeps the dispatch under our PAT.
-  dispatch-docker:
+  docker:
     needs: release
     runs-on: ubuntu-latest
-    environment: NexusLab
     steps:
-      - name: Trigger Docker.Framework workflow_dispatch
-        uses: actions/github-script@v8
-        env:
-          RELEASE_REPOSITORY: ${{ vars.DOCKER_RELEASE_REPOSITORY }}
-          DOCKER_IMAGE: ${{ vars.DOCKER_IMAGE }}
-          DOCKER_PLATFORMS: ${{ vars.DOCKER_PLATFORMS }}
-          DOCKER_WORKFLOW: ${{ vars.DOCKER_WORKFLOW }}
-          DOCKER_REF: ${{ vars.DOCKER_REF }}
-          GHCR_IMAGE: ${{ vars.GHCR_IMAGE }}
+      - name: Download linux-x64 lite tarball
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          curl -fsSL --retry 5 --retry-delay 5 -o app.tar.gz \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/NexusLab-${TAG}-linux-x64-lite.tar.gz"
+          mkdir -p docker-context
+          tar -xzf app.tar.gz -C docker-context
+
+      - name: Write Dockerfile
+        run: |
+          cat > docker-context/Dockerfile <<'DOCKERFILE'
+          FROM node:24.22.1-slim
+          WORKDIR /app
+          COPY . .
+          ENV NEXUSLAB_ACCEPT_EULA=1 \
+              NEXUSLAB_ACCEPT_PRIVACY=1 \
+              NEXUSLAB_WEBUI_HOST=0.0.0.0
+          EXPOSE 5099
+          CMD ["node", "index.mjs"]
+          DOCKERFILE
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          github-token: ${{ secrets.NEXUSLAB_TOKEN }}
-          script: |
-            const target = process.env.RELEASE_REPOSITORY;
-            if (!target || !target.includes('/')) {
-              throw new Error('Set NexusLab environment variable DOCKER_RELEASE_REPOSITORY to owner/repo.');
-            }
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-            const [owner, repo] = target.split('/');
-            const tag = context.ref.replace('refs/tags/', '');
-            const sourceRepo = context.repo.owner + '/' + context.repo.repo;
-            const image = process.env.DOCKER_IMAGE || 'motricseven7/nexuslab';
-            const platforms = process.env.DOCKER_PLATFORMS || 'linux/amd64,linux/arm64';
-            const workflowId = process.env.DOCKER_WORKFLOW || 'docker-image.yml';
-            const ref = process.env.DOCKER_REF || 'main';
-            const ghcrImage = process.env.GHCR_IMAGE || '';
-
-            await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: workflowId,
-              ref,
-              inputs: {
-                image,
-                tag,
-                push: 'true',
-                platforms,
-                nexuslab_tag: tag,
-                nexuslab_repository: sourceRepo,
-                ghcr_image: ghcrImage,
-              },
-            });
-
-            core.info(`Dispatched ${workflowId}@${ref} on ${target} for NexusLab release ${sourceRepo}@${tag} (image=${image}, ghcr_image=${ghcrImage}, platforms=${platforms}).`);
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: docker-context
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/nexuslab:${{ github.ref_name }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/nexuslab:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.ref_name }}
