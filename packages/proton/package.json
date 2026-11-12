@@ -1,7 +1,7 @@
 {
   "license": "GPL-2.0",
   "name": "@nexuslab/proton",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "private": true,
   "type": "module",
   "description": "Compile-time protobuf encoder/decoder generator for NexusLab. TypeScript interfaces → fully-inlined, zero-runtime protobuf codec functions. Vendored from NexusLab/protobuf-dsl with edge-case fixes applied.",

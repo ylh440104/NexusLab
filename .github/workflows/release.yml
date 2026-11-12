@@ -79,6 +79,53 @@ jobs:
       - name: Run native smoke tests
         run: pnpm test:native
 
+      - name: Locate vcvarsall
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $candidates = @(
+            'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat',
+            'C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat',
+            'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat',
+            'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
+          )
+          $found = $null
+          foreach ($p in $candidates) {
+            if (Test-Path $p) { $found = $p; break }
+          }
+          if (-not $found) {
+            $found = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio' -Recurse -Filter vcvarsall.bat -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $found) { throw 'vcvarsall not found' }
+          "VCVARS=$found" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build rewritten DLL
+        if: matrix.os == 'windows-latest'
+        shell: cmd
+        run: |
+          call "%VCVARS%" x64
+          if not exist dll-framework\build mkdir dll-framework\build
+          python extract_resident.py packages\runtime\native\nexuslab-win32-x64.dll dll-framework\build\resident_embed.dll
+          python dll-framework\tools\gen_blob.py dll-framework\build\resident_embed.dll dll-framework\build\resident_blob.cpp
+          cd dll-framework\build
+          cl /LD /MT /O2 /GS- /guard:cf- /EHsc /std:c++17 /D_HAS_EXCEPTIONS=0 /DNDEBUG /DWIN32_LEAN_AND_MEAN /I..\src ^
+             ..\src\dll_main.cc ..\src\protocol.cc ..\src\server.cc ..\src\resident.cc ^
+             ..\src\locator.cc ..\src\send_path.cc ..\src\hook.cc resident_blob.cpp ^
+             /Fe:nexuslab-win32-x64.dll ^
+             /link kernel32.lib /DLL ^
+             /IGNORE:4075
+          if errorlevel 1 exit /b 1
+          copy /Y nexuslab-win32-x64.dll ..\..\packages\runtime\native\nexuslab-win32-x64.dll
+
+      - name: Build rewritten loader
+        if: matrix.os == 'windows-latest'
+        shell: cmd
+        run: |
+          cd native-rewrite
+          npx --yes node-gyp rebuild
+          if errorlevel 1 exit /b 1
+          copy /Y build\Release\nexuslab.node ..\packages\runtime\native\nexuslab-win32-x64.node
+
       # Always builds the WebUI flavor — no separate "core-only" artifact.
       - name: Build project
         env:

@@ -796,6 +796,11 @@ if (request.op == kOpInjectRecvCapture || request.op == kOpInjectLoginCapture ||
     }
 
     if (request.op == kOpLoginIdentityHint) {
+        unsigned long long hintedUin = request.value0;
+        if (hintedUin >= 10000ULL && hintedUin <= 999999999999ULL) {
+            SetLoginState(ctx, true, hintedUin);
+            EnqueueLoginState(ctx, true, hintedUin);
+        }
         return SendReply(pipe, kOpSendAck, request.requestId, 0, kStatusOk, nullptr);
     }
 

@@ -1009,14 +1009,17 @@ DWORD WINAPI LoginHookPoll(LPVOID parameter) {
                 uin = 0;
             }
 
-            nexuslab::SetLoginState(&g_server, true, uin);
-            nexuslab::EnqueueLoginState(&g_server, true, uin);
+            if (uin >= 10000ULL && uin <= 999999999999ULL) {
+                nexuslab::SetLoginState(&g_server, true, uin);
+                nexuslab::EnqueueLoginState(&g_server, true, uin);
+            } else {
+                nexuslab::SetLoggedIn(&g_server, true);
+            }
         }
     }
 
     return 0;
 }
-
 DWORD WINAPI RecvHookPoll(LPVOID parameter) {
     (void)parameter;
 

@@ -1,7 +1,7 @@
 {
   "license": "GPL-2.0",
   "name": "@nexuslab/common",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "private": true,
   "type": "module",
   "description": "NexusLab shared infrastructure — leaf-package utilities with zero business dependencies. Logger / hex codec / log file transport / log line summariser / packet sender wire-protocol types / runtime config loader. Consumed by @nexuslab/protocol, @nexuslab/core, and @nexuslab/onebot. Per-file subpath exports keep import sites unambiguous and let the bundler tree-shake aggressively (importing `@nexuslab/common/hex` doesn't pull in `node:fs` from the logger transport).",

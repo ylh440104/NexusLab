@@ -1,7 +1,7 @@
 {
   "license": "GPL-2.0",
   "name": "@nexuslab/bridge",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "private": true,
   "type": "module",
   "description": "NexusLab bridge — QQ NT desktop client lifecycle: hook injection (via native addon), per-PID HookSession orchestration, pipe-watcher for process discovery, and the BridgeManagerSink interface that lets the hook layer call back into a UIN-keyed session router without depending on @nexuslab/core. Consumed by the top-level app entry (which constructs the BridgeManager from @nexuslab/core and injects it as the sink) and by the WebUI server (read-only HookProcessInfo views).",
