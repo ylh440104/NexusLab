@@ -32,7 +32,7 @@ jobs:
       - name: build websocket addon
         run: |
           cd websocket-addon
-          npm install node-addon-api node-gyp
+          npm install
           npx node-gyp configure build
           file build/Release/websocket_addon.node 2>/dev/null || dir build\\Release
       - name: stage artifact
@@ -87,7 +87,7 @@ jobs:
       - name: build injector node
         run: |
           cd linux-injector
-          npm install node-addon-api
+          npm install
           npx node-gyp configure build
           ls -la build/Release/
       - name: stage artifact
