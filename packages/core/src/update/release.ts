@@ -84,7 +84,7 @@ export function parseReleaseAssetsPage(html: string, version: string) {
             links.some((link) => {
                 const href = attribute(link, 'href');
                 return (
-                    href === `/NexusLab/NexusLab/releases/download/v${version}/${candidate}` ||
+                    href === `/ylh440104/NexusLab/releases/download/v${version}/${candidate}` ||
                     href === `${RELEASE_ROOT}/download/v${version}/${candidate}`
                 );
             }),
@@ -127,7 +127,7 @@ export async function fetchRelease(
     userAgent = 'NexusLab',
     timeoutMs = 8_000,
 ): Promise<ReleaseResult> {
-    const apiUrl = `https://api.github.com/repos/NexusLab/NexusLab/releases/${version ? `tags/v${version}` : 'latest'}`;
+    const apiUrl = `https://api.github.com/repos/ylh440104/NexusLab/releases/${version ? `tags/v${version}` : 'latest'}`;
     let primaryError: unknown;
 
     try {

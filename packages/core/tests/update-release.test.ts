@@ -9,10 +9,10 @@ import {
 
 const direct: UpdateSourceConfig = { mode: 'direct', mirror: '', mirrors: [] };
 const latest =
-    '<meta property="og:url" content="https://github.com/NexusLab/NexusLab/releases/tag/v2.0.1">';
+    '<meta property="og:url" content="https://github.com/ylh440104/NexusLab/releases/tag/v2.0.1">';
 const digest = `sha256:${'a'.repeat(64)}`;
 const name = assetName('2.0.1', 'win32-x64');
-const row = `<li><a href="/NexusLab/NexusLab/releases/download/v2.0.1/${name}">${name}</a><clipboard-copy value="${digest}"></clipboard-copy></li>`;
+const row = `<li><a href="/ylh440104/NexusLab/releases/download/v2.0.1/${name}">${name}</a><clipboard-copy value="${digest}"></clipboard-copy></li>`;
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -20,7 +20,7 @@ describe('existing GitHub release pages', () => {
     it('reads the canonical stable release without a new metadata asset', () => {
         expect(parseLatestReleasePage(latest)).toEqual({
             tag_name: 'v2.0.1',
-            html_url: 'https://github.com/NexusLab/NexusLab/releases/tag/v2.0.1',
+            html_url: 'https://github.com/ylh440104/NexusLab/releases/tag/v2.0.1',
         });
         expect(parseLatestReleasePage(latest.replace('https://github.com', '')).tag_name).toBe(
             'v2.0.1',
@@ -30,7 +30,7 @@ describe('existing GitHub release pages', () => {
     it.each([
         '<html>please sign in</html>',
         latest.replace('github.com', 'unrelated.example'),
-        latest.replace('/NexusLab/NexusLab/', '/other/project/'),
+        latest.replace('/ylh440104/NexusLab/', '/other/project/'),
         latest.replace('v2.0.1', 'v02.0.1'),
         latest.replace('v2.0.1', 'v2.0.1-rc.1'),
     ])('rejects non-release or invalid version pages', (html) => {
@@ -66,8 +66,8 @@ describe('existing GitHub release pages', () => {
             data: { tag_name: 'v2.0.1' },
         });
         expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-            'https://api.github.com/repos/NexusLab/NexusLab/releases/latest',
-            'https://github.com/NexusLab/NexusLab/releases/latest',
+            'https://api.github.com/repos/ylh440104/NexusLab/releases/latest',
+            'https://github.com/ylh440104/NexusLab/releases/latest',
         ]);
     });
 
@@ -102,7 +102,7 @@ describe('existing GitHub release pages', () => {
 
     it('keeps direct release lookup when the pinned download mirror cannot serve pages', async () => {
         const fetchMock = vi.fn<typeof fetch>(async (url) =>
-            String(url) === 'https://github.com/NexusLab/NexusLab/releases/latest'
+            String(url) === 'https://github.com/ylh440104/NexusLab/releases/latest'
                 ? new Response(latest)
                 : new Response('blocked', { status: 403 }),
         );

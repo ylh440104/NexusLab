@@ -5,12 +5,12 @@
   "description": "MCP server exposing the NexusLab OneBot action catalog (docs + JSON Schemas) and optional execution to LLM clients.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NexusLab/NexusLab.git",
+    "url": "git+https://github.com/ylh440104/NexusLab.git",
     "directory": "packages/mcp"
   },
-  "homepage": "https://github.com/NexusLab/NexusLab#readme",
+  "homepage": "https://github.com/ylh440104/NexusLab#readme",
   "bugs": {
-    "url": "https://github.com/NexusLab/NexusLab/issues"
+    "url": "https://github.com/ylh440104/NexusLab/issues"
   },
   "type": "module",
   "bin": {

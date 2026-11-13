@@ -24,7 +24,7 @@ afterEach(async () => {
 
 function mockRelease(bytes: Uint8Array, target: string, digest?: string) {
     const name = assetName('2.0.0', target);
-    const url = `https://github.com/NexusLab/NexusLab/releases/download/v2.0.0/${name}`;
+    const url = `https://github.com/ylh440104/NexusLab/releases/download/v2.0.0/${name}`;
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
         if (String(input).startsWith('https://api.github.com/')) {
             return Response.json({
@@ -66,7 +66,7 @@ describe('release downloads', () => {
 
                 if (url.includes('/expanded_assets/')) {
                     return new Response(
-                        `<li><a href="/NexusLab/NexusLab/releases/download/v2.0.0/${name}">asset</a><clipboard-copy value="sha256:${digest}"></clipboard-copy></li>`,
+                        `<li><a href="/ylh440104/NexusLab/releases/download/v2.0.0/${name}">asset</a><clipboard-copy value="sha256:${digest}"></clipboard-copy></li>`,
                     );
                 }
 
@@ -118,8 +118,8 @@ describe('release downloads', () => {
                     .filter(([url]) => String(url).includes('/download/'))
                     .map(([url]) => String(url)),
             ).toEqual([
-                `https://github.com/NexusLab/NexusLab/releases/download/v2.0.0/${name}`,
-                `https://working.example/https://github.com/NexusLab/NexusLab/releases/download/v2.0.0/${name}`,
+                `https://github.com/ylh440104/NexusLab/releases/download/v2.0.0/${name}`,
+                `https://working.example/https://github.com/ylh440104/NexusLab/releases/download/v2.0.0/${name}`,
             ]);
         },
     );
@@ -141,8 +141,8 @@ describe('release downloads', () => {
             }),
         ).rejects.toThrow('HTTP 403');
         expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-            'https://api.github.com/repos/NexusLab/NexusLab/releases/tags/v2.0.0',
-            `https://pinned.example/https://github.com/NexusLab/NexusLab/releases/download/v2.0.0/${assetName('2.0.0', 'win32-x64')}`,
+            'https://api.github.com/repos/ylh440104/NexusLab/releases/tags/v2.0.0',
+            `https://pinned.example/https://github.com/ylh440104/NexusLab/releases/download/v2.0.0/${assetName('2.0.0', 'win32-x64')}`,
         ]);
         expect(await readdir(root)).toEqual([]);
     });

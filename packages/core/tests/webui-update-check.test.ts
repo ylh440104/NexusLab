@@ -4,7 +4,7 @@ import { getUpdateInfo as checkUpdate } from '../src/update/check';
 const getUpdateInfo = (force = false) =>
     checkUpdate(force, { mode: 'direct', mirror: '', mirrors: [] });
 
-const LATEST_RELEASE_URL = 'https://api.github.com/repos/NexusLab/NexusLab/releases/latest';
+const LATEST_RELEASE_URL = 'https://api.github.com/repos/ylh440104/NexusLab/releases/latest';
 const NOTES_MAX = 4_000;
 const originalFetch = globalThis.fetch;
 const savedUpdateCheck = process.env.NEXUSLAB_UPDATE_CHECK;
@@ -131,7 +131,7 @@ describe('getUpdateInfo', () => {
         mockFetch(async () =>
             jsonResponse({
                 tag_name: '  v1.14.7  ',
-                html_url: 'https://github.com/NexusLab/NexusLab/releases/tag/v1.14.7',
+                html_url: 'https://github.com/ylh440104/NexusLab/releases/tag/v1.14.7',
                 body: 'hello',
                 published_at: '2026-06-01T12:00:00Z',
             }),
@@ -142,7 +142,7 @@ describe('getUpdateInfo', () => {
             current: '0.0.0',
             latest: '1.14.7',
             hasUpdate: true,
-            htmlUrl: 'https://github.com/NexusLab/NexusLab/releases/tag/v1.14.7',
+            htmlUrl: 'https://github.com/ylh440104/NexusLab/releases/tag/v1.14.7',
             notes: 'hello',
             publishedAt: '2026-06-01T12:00:00Z',
         });
@@ -269,7 +269,7 @@ describe('getUpdateInfo', () => {
         const fetchMock = mockFetch(async () =>
             jsonResponse({
                 tag_name: 'v3.1.0',
-                html_url: 'https://github.com/NexusLab/NexusLab/releases/tag/v3.1.0',
+                html_url: 'https://github.com/ylh440104/NexusLab/releases/tag/v3.1.0',
                 body: 'cached',
                 published_at: '2026-07-01T00:00:00Z',
             }),
@@ -319,7 +319,7 @@ describe('getUpdateInfo', () => {
         pending.resolve(
             jsonResponse({
                 tag_name: 'v2.0.0',
-                html_url: 'https://github.com/NexusLab/NexusLab/releases/tag/v2.0.0',
+                html_url: 'https://github.com/ylh440104/NexusLab/releases/tag/v2.0.0',
                 body: 'two',
                 published_at: '2026-07-01T00:00:00Z',
             }),
@@ -329,7 +329,7 @@ describe('getUpdateInfo', () => {
         expect(a).toMatchObject({
             latest: '2.0.0',
             hasUpdate: true,
-            htmlUrl: 'https://github.com/NexusLab/NexusLab/releases/tag/v2.0.0',
+            htmlUrl: 'https://github.com/ylh440104/NexusLab/releases/tag/v2.0.0',
             notes: 'two',
             publishedAt: '2026-07-01T00:00:00Z',
         });

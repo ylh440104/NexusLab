@@ -1915,7 +1915,7 @@ function DeveloperPanel() {
 
 // ─────────────── 关于 ───────────────
 
-const REPO_URL = 'https://github.com/NexusLab/NexusLab';
+const REPO_URL = 'https://github.com/ylh440104/NexusLab';
 
 function UpdateGroup() {
     const { updateInfo, refreshUpdate, resources } = useAppState();

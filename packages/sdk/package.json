@@ -14,13 +14,13 @@
     "bot",
     "sdk"
   ],
-  "homepage": "https://github.com/NexusLab/NexusLab#readme",
+  "homepage": "https://github.com/ylh440104/NexusLab#readme",
   "bugs": {
-    "url": "https://github.com/NexusLab/NexusLab/issues"
+    "url": "https://github.com/ylh440104/NexusLab/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NexusLab/NexusLab.git",
+    "url": "git+https://github.com/ylh440104/NexusLab.git",
     "directory": "packages/sdk"
   },
   "license": "GPL-2.0",

@@ -5,7 +5,7 @@ import {
     type UpdateSourceConfig,
 } from '@nexuslab/common/update-source';
 
-export const RELEASE_ROOT = 'https://github.com/NexusLab/NexusLab/releases';
+export const RELEASE_ROOT = 'https://github.com/ylh440104/NexusLab/releases';
 export const DEFAULT_UPDATE_SOURCE: UpdateSourceConfig = {
     mode: 'auto',
     mirror: '',
