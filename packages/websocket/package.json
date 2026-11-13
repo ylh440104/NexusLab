@@ -1,7 +1,7 @@
 {
   "license": "AGPL-3.0",
   "name": "@nexuslab/websocket",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
