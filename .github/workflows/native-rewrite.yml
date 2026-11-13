@@ -34,7 +34,7 @@ jobs:
           cd websocket-addon
           npm install
           npx node-gyp configure build
-          file build/Release/websocket_addon.node 2>/dev/null || dir build\\Release
+          ls -la build/Release/
       - name: stage artifact
         shell: bash
         run: |
