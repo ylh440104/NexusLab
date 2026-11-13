@@ -24,28 +24,37 @@ public:
         size_t offset = 0;
         error_ = 0;
         message_.clear();
-        while (offset < size && error_ == 0) {
+        emitFrames_.clear();
+        bool progressed = true;
+        while (offset < size && error_ == 0 && progressed) {
             size_t consumed = 0;
-            if (!Step(data + offset, size - offset, &consumed)) {
-                break;
-            }
-            if (consumed == 0 && !frameDone_) {
-                break;
-            }
-            offset += consumed;
+            bool ok = Step(data + offset, size - offset, &consumed);
             if (frameDone_) {
                 frameDone_ = false;
-                emitFrame_ = true;
+                EmitFrame out;
+                out.fin = lastFin_;
+                out.rsv = lastRsv_;
+                out.opcode = lastOpcode_;
+                out.payload.assign(frameBuf_.begin(), frameBuf_.begin() + static_cast<long>(frameLen_));
+                emitFrames_.push_back(std::move(out));
             }
+            if (!ok) {
+                break;
+            }
+            if (consumed == 0) {
+                progressed = false;
+                continue;
+            }
+            offset += consumed;
         }
         Napi::Object result = Napi::Object::New(env);
         Napi::Array frames = Napi::Array::New(env);
-        if (emitFrame_) {
+        for (const auto& f : emitFrames_) {
             Napi::Object frame = Napi::Object::New(env);
-            frame.Set("fin", Napi::Boolean::New(env, lastFin_));
-            frame.Set("rsv", Napi::Number::New(env, static_cast<double>(lastRsv_)));
-            frame.Set("opcode", Napi::Number::New(env, static_cast<double>(lastOpcode_)));
-            frame.Set("payload", Napi::Buffer<uint8_t>::Copy(env, frameBuf_.data(), frameLen_));
+            frame.Set("fin", Napi::Boolean::New(env, f.fin));
+            frame.Set("rsv", Napi::Number::New(env, static_cast<double>(f.rsv)));
+            frame.Set("opcode", Napi::Number::New(env, static_cast<double>(f.opcode)));
+            frame.Set("payload", Napi::Buffer<uint8_t>::Copy(env, f.payload.data(), f.payload.size()));
             frames.Set(frames.Length(), frame);
         }
         result.Set("frames", frames);
@@ -238,7 +247,13 @@ private:
     size_t frameLen_ = 0;
     size_t got_ = 0;
     bool frameDone_ = false;
-    bool emitFrame_ = false;
+    struct EmitFrame {
+        bool fin;
+        int rsv;
+        int opcode;
+        std::vector<uint8_t> payload;
+    };
+    std::vector<EmitFrame> emitFrames_;
     bool lastFin_ = false;
     int lastRsv_ = 0;
     int lastOpcode_ = 0;
