@@ -59,7 +59,8 @@ export function parseLatestReleasePage(html: string) {
     }
 
     const url = new URL(canonical, 'https://github.com');
-    const tag = /^\/NexusLab\/NexusLab\/releases\/tag\/([^/]+)$/.exec(url.pathname)?.[1];
+    const releasePath = new URL(RELEASE_ROOT).pathname;
+    const tag = new RegExp(`^${releasePath}/tag/([^/]+)$`).exec(url.pathname)?.[1];
     const decoded = tag && decodeURIComponent(tag);
     const version = decoded?.startsWith('v') ? decoded.slice(1) : undefined;
     const parsed = parseVersion(version);
