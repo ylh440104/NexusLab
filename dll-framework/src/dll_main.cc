@@ -1430,37 +1430,15 @@ void JoinWorker(HANDLE worker) {
 
 int BindDispatch(void* context, unsigned int kind, unsigned int* outKind,
                  unsigned long long* outValue) {
-    nexuslab::ResidentModule* resident = static_cast<nexuslab::ResidentModule*>(context);
-
-    if (resident == nullptr || outKind == nullptr || outValue == nullptr) {
-        return 0;
+    (void)context;
+    (void)kind;
+    if (outKind != nullptr) {
+        *outKind = 0;
     }
-
-    unsigned int resolved = kind;
-    if (resolved > nexuslab::kKindSlotA) {
-        return 0;
+    if (outValue != nullptr) {
+        *outValue = 0;
     }
-
-    *outKind = resolved;
-
-    if (!resident->abiChecked) {
-        return 0;
-    }
-
-    void* table = nexuslab::ResidentGetDispatch(resident, resolved, &g_bindAnchorA,
-                                                &g_bindAnchorB);
-
-    if (table == nullptr) {
-        unsigned long err = GetLastError();
-        if (err != 0) {
-            resident->lastError = err;
-            InterlockedExchange(&g_server.residentError, static_cast<LONG>(err));
-        }
-        return 0;
-    }
-
-    *outValue = reinterpret_cast<unsigned long long>(table);
-    return 1;
+    return 0;
 }
 
 }
