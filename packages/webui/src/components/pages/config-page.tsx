@@ -16,6 +16,11 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { SkeletonSwap } from '@/components/interior/skeleton-swap';
 import { cn } from '@/lib/utils';
 import type { AdapterStatus, NetworkKind, OneBotConfig, OneBotNetworks } from '@/types';
+import {
+    applySharedDefaultAccessToken,
+    detectSplitDefaultAccessToken,
+    type SplitDefaultTokenReport,
+} from '@nexuslab/onebot/config';
 import { useOneBotInstanceConfig } from '@/hooks/use-onebot-instance-config';
 import { useAppState } from '@/contexts/AppStateContext';
 import { useLayout } from '@/contexts/LayoutContext';
@@ -84,6 +89,14 @@ export function ConfigPage() {
     // wiring needed beyond the dialog's own open/close.
     const [dialog, setDialog] = useState<DialogState>({ open: false });
 
+    // Legacy installs generated a different random token for the factory HTTP
+    // and WS listeners. Clients that reuse one token for both (SurfCore et al.)
+    // then always got 401 on WS. Offer a one-click alignment instead of
+    // silently rewriting the operator's tokens.
+    const [migrationReport, setMigrationReport] = useState<SplitDefaultTokenReport | null>(null);
+    const promotedUinsRef = useRef<Set<string>>(new Set());
+    const migrationPromptedRef = useRef<Set<string>>(new Set());
+
     const pendingSwitchAccount = useMemo(
         () => (pendingSwitchUin ? (qqList.find((q) => q.uin === pendingSwitchUin) ?? null) : null),
         [pendingSwitchUin, qqList],
@@ -123,6 +136,42 @@ export function ConfigPage() {
             }
         };
     }, [dirty, config, save]);
+
+    // Detect the legacy split-token layout once per account per page session.
+    // Re-prompting on every re-render would nag; declining is remembered for
+    // the session only, so a reload can surface it again.
+    useEffect(() => {
+        if (loading || !config || !selectedUin) {
+            return;
+        }
+        if (migrationPromptedRef.current.has(selectedUin)) {
+            return;
+        }
+        const report = detectSplitDefaultAccessToken(config);
+        if (!report) {
+            promotedUinsRef.current.add(selectedUin);
+            return;
+        }
+        migrationPromptedRef.current.add(selectedUin);
+        setMigrationReport(report);
+    }, [config, loading, selectedUin]);
+
+    const acceptTokenMigration = useCallback(() => {
+        if (!migrationReport || !config) {
+            return;
+        }
+        const next = applySharedDefaultAccessToken(config, migrationReport);
+        promotedUinsRef.current.add(selectedUin);
+        setMigrationReport(null);
+        setConfig(next);
+        void save(next);
+    }, [config, migrationReport, save, selectedUin, setConfig]);
+
+    const declineTokenMigration = useCallback(() => {
+        promotedUinsRef.current.add(selectedUin);
+        setMigrationReport(null);
+    }, [selectedUin]);
+
 
     /** Immediate save: clear any pending auto-save debounce and persist now. */
     const immediateSave = useCallback(() => {
@@ -365,6 +414,35 @@ export function ConfigPage() {
                                 />
                             )}
 
+                            <ConfirmDialog
+                                open={migrationReport != null}
+                                onOpenChange={(open) => !open && declineTokenMigration()}
+                                title="统一 HTTP 与 WebSocket 的 Access Token？"
+                                description={
+                                    <div className="space-y-3 text-sm">
+                                        <p>
+                                            当前 HTTP 与 WebSocket
+                                            监听器各自使用不同的随机 Token，导致只配置单个
+                                            Token
+                                            的客户端（SurfCore
+                                            等）在连接 WebSocket 时总是收到 401。
+                                        </p>
+                                        <p>
+                                            可将两边的 Token
+                                            统一为 HTTP
+                                            那边的值，之后客户端只需填一个
+                                            Token。
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">
+                                            如果你有意让两个端点使用不同
+                                            Token，选择取消即可，不做任何修改。
+                                        </p>
+                                    </div>
+                                }
+                                confirmText="统一 Token"
+                                cancelText="保持不变"
+                                onConfirm={acceptTokenMigration}
+                            />
                             <ConfirmDialog
                                 open={pendingSwitchUin != null}
                                 onOpenChange={(open) => !open && cancelSwitch()}
