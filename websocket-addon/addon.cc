@@ -25,9 +25,9 @@ public:
         error_ = 0;
         message_.clear();
         emitFrames_.clear();
-        bool progressed = true;
-        while (offset < size && error_ == 0 && progressed) {
+        while (offset < size && error_ == 0) {
             size_t consumed = 0;
+            State before = state_;
             bool ok = Step(data + offset, size - offset, &consumed);
             if (frameDone_) {
                 frameDone_ = false;
@@ -41,11 +41,10 @@ public:
             if (!ok) {
                 break;
             }
-            if (consumed == 0) {
-                progressed = false;
-                continue;
-            }
             offset += consumed;
+            if (consumed == 0 && state_ == before) {
+                break;
+            }
         }
         Napi::Object result = Napi::Object::New(env);
         Napi::Array frames = Napi::Array::New(env);
