@@ -1,7 +1,7 @@
 {
   "license": "GPL-2.0",
   "name": "nexuslab-monorepo",
-  "version": "2.4.4",
+  "version": "2.4.5",
   "description": "NexusLab monorepo workspace (pnpm)",
   "private": true,
   "type": "module",
