@@ -1,0 +1,145 @@
+name: qq-send-path-test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: fetch and install qq
+        shell: pwsh
+        run: |
+          $repo = 'ylh440104/NexusLab-verify'
+          $raw = "https://raw.githubusercontent.com/$repo/main/qqinstaller"
+          $manifest = $null
+          for ($try = 1; $try -le 5; $try++) {
+            try {
+              $manifest = Invoke-RestMethod -Uri "$raw/manifest.json" -TimeoutSec 40
+              break
+            } catch {
+              Write-Output "manifest try $try failed: $($_.Exception.Message)"
+              Start-Sleep -Seconds (5 * $try)
+            }
+          }
+          if ($null -eq $manifest) { throw 'manifest fetch failed' }
+          New-Item -ItemType Directory -Path pkg -Force | Out-Null
+          for ($i = 0; $i -lt $manifest.chunk_count; $i++) {
+            $name = 'part_{0:D3}.bin' -f $i
+            $ok = $false
+            for ($try = 1; $try -le 5; $try++) {
+              try {
+                $wc = New-Object System.Net.WebClient
+                $wc.Headers.Add('User-Agent', 'nexuslab-ci')
+                $wc.DownloadFile("$raw/$name", "pkg\$name")
+                $ok = $true
+                break
+              } catch {
+                Write-Output "chunk $name try $try failed: $($_.Exception.Message)"
+                Start-Sleep -Seconds (5 * $try)
+              }
+            }
+            if (-not $ok) { throw "chunk $name download failed" }
+          }
+          $out = 'pkg\QQ_setup.exe'
+          $fs = [System.IO.File]::Create((Resolve-Path '.').Path + '\' + $out)
+          foreach ($p in (Get-ChildItem 'pkg\part_*.bin' | Sort-Object Name)) {
+            $bytes = [System.IO.File]::ReadAllBytes($p.FullName)
+            $fs.Write($bytes, 0, $bytes.Length)
+          }
+          $fs.Close()
+          if ((Get-FileHash $out -Algorithm SHA256).Hash.ToLower() -ne $manifest.sha256) { throw 'sha mismatch' }
+          Write-Output "SHA_OK"
+          $p = Start-Process -FilePath (Resolve-Path $out).Path -ArgumentList '/S' -Wait -PassThru
+          Write-Output "install exit=$($p.ExitCode)"
+
+      - name: locate vcvarsall
+        shell: pwsh
+        run: |
+          $found = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio' -Recurse -Filter vcvarsall.bat -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $found) { throw 'vcvarsall not found' }
+          "VCVARS=$found" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: generate resident blob
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dll-framework/build -Force | Out-Null
+          python extract_resident.py packages/runtime/native/nexuslab-win32-x64.dll dll-framework/build/resident_embed.dll
+          python dll-framework/tools/gen_blob.py dll-framework/build/resident_embed.dll dll-framework/build/resident_blob.cpp
+
+      - name: build dll
+        shell: cmd
+        run: |
+          call "%VCVARS%" x64
+          cd dll-framework\build
+          cl /LD /MT /O2 /GS- /guard:cf- /EHsc /std:c++17 /D_HAS_EXCEPTIONS=0 /DNDEBUG /DWIN32_LEAN_AND_MEAN /I..\src ^
+             ..\src\dll_main.cc ..\src\protocol.cc ..\src\server.cc ..\src\resident.cc ^
+             ..\src\locator.cc ..\src\send_path.cc ..\src\hook.cc resident_blob.cpp ^
+             /Fe:nexuslab-win32-x64.dll ^
+             /link kernel32.lib /DLL ^
+             /IGNORE:4075
+          if errorlevel 1 exit /b 1
+          dir nexuslab-win32-x64.dll
+
+      - name: launch qq
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath 'C:\Program Files\Tencent\QQNT\QQ.exe' -PassThru
+          Write-Output "QQ pid=$($p.Id)"
+          Start-Sleep -Seconds 35
+          $procs = Get-Process -Name 'QQ' -ErrorAction SilentlyContinue
+          $main = $procs | Where-Object { $_.MainWindowTitle -ne '' } | Select-Object -First 1
+          if (-not $main) { $main = $procs | Select-Object -First 1 }
+          Write-Output "MAIN_PID $($main.Id)"
+          Add-Content -Path $env:GITHUB_ENV -Value "MAIN_PID=$($main.Id)"
+
+      - name: build harness
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path harness_out -Force | Out-Null
+          $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          & $csc /nologo /target:exe /out:harness_out\Harness.exe harness.cs
+          if (-not (Test-Path 'harness_out\Harness.exe')) { throw 'Harness not built' }
+          Write-Output "Harness built"
+          Get-Item harness_out\Harness.exe | Select-Object Name, Length
+          $global:LASTEXITCODE = 0
+
+      - name: enumerate qq processes
+        shell: pwsh
+        run: |
+          & 'harness_out\Harness.exe' -enum 2>&1 | ForEach-Object { Write-Output "$_" }
+          $global:LASTEXITCODE = 0
+
+      - name: run send path test
+        shell: pwsh
+        run: |
+          $pid_ = [int]$env:MAIN_PID
+          $dll = (Resolve-Path 'dll-framework\build\nexuslab-win32-x64.dll').Path
+          Write-Output "dll=$dll pid=$pid_"
+          & 'harness_out\Harness.exe' -pid $pid_ -dll $dll 2>&1 | ForEach-Object { Write-Output "$_" }
+          Write-Output "harness exit=$LASTEXITCODE"
+          $global:LASTEXITCODE = 0
+
+      - name: screenshot
+        shell: pwsh
+        if: always()
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bmp.Save("$PWD\screen.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $g.Dispose(); $bmp.Dispose()
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: send-path-result
+          path: |
+            screen.png
+            dll-framework/build/nexuslab-win32-x64.dll
+          retention-days: 3
