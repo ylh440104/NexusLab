@@ -22,7 +22,7 @@ public:
     Napi::Object Push(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         if (info.Length() < 1 || !info[0].IsBuffer()) {
-            Napi::TypeError::New(env, "Parser.push expects a Buffer").ThrowAsJavaScriptException();
+            Napi::TypeError::New(env, "Parser.push: expected Buffer").ThrowAsJavaScriptException();
             return Napi::Object::New(env);
         }
         Napi::Buffer<uint8_t> chunk = info[0].As<Napi::Buffer<uint8_t>>();
@@ -88,9 +88,11 @@ private:
         }
         result.Set("frames", frames);
         if (error_ != 0) {
-            result.Set("error", Napi::Boolean::New(env, true));
-            result.Set("code", Napi::Number::New(env, static_cast<double>(error_)));
-            result.Set("message", Napi::String::New(env, message_.c_str()));
+            Napi::Object failed = Napi::Object::New(env);
+            failed.Set("error", Napi::Boolean::New(env, true));
+            failed.Set("code", Napi::Number::New(env, static_cast<double>(error_)));
+            failed.Set("message", Napi::String::New(env, message_.c_str()));
+            return failed;
         }
         return result;
     }
