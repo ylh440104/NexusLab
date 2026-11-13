@@ -1416,6 +1416,7 @@ DWORD WINAPI WorkerThread(void* parameter) {
     g_recv = CreateThread(nullptr, 0, nexuslab::RecvThread, &g_server, 0, nullptr);
     g_writer = CreateThread(nullptr, 0, nexuslab::WriterThread, &g_server, 0, nullptr);
     g_recvPathPoll = CreateThread(nullptr, 0, RecvPathPoll, nullptr, 0, nullptr);
+    g_recvPoll = CreateThread(nullptr, 0, RecvHookPoll, nullptr, 0, nullptr);
     g_autoHook = CreateThread(nullptr, 0, AutoHookThread, nullptr, 0, nullptr);
     g_loginPoll = CreateThread(nullptr, 0, LoginHookPoll, nullptr, 0, nullptr);
     nexuslab::ResidentInit(&g_resident);
@@ -1517,6 +1518,8 @@ BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         g_writer = nullptr;
         JoinWorker(g_recvPathPoll);
         g_recvPathPoll = nullptr;
+        JoinWorker(g_recvPoll);
+        g_recvPoll = nullptr;
         JoinWorker(g_autoHook);
         g_autoHook = nullptr;
         JoinWorker(g_loginPoll);
