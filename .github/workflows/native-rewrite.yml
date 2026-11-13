@@ -1,0 +1,100 @@
+name: native-rewrite
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'websocket-addon/**'
+      - 'linux-hook-so/**'
+      - 'linux-injector/**'
+
+jobs:
+  build-websocket:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - os: windows-latest
+            platform: win32
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: build websocket addon
+        run: |
+          cd websocket-addon
+          npm install node-addon-api node-gyp
+          npx node-gyp configure build
+          file build/Release/websocket_addon.node 2>/dev/null || dir build\\Release
+      - name: stage artifact
+        shell: bash
+        run: |
+          mkdir -p out
+          cp websocket-addon/build/Release/websocket_addon.node "out/websocket-${{ matrix.platform }}-${{ matrix.arch }}.node"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: websocket-${{ matrix.platform }}-${{ matrix.arch }}
+          path: out/
+
+  build-linux-hook:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: build hook so
+        run: |
+          cd linux-hook-so
+          g++ -shared -fPIC -O2 -std=c++17 -o nexuslab-linux-${{ matrix.arch }}.so hook.cc -lpthread
+          ls -la
+      - name: stage artifact
+        run: |
+          mkdir -p out
+          cp linux-hook-so/nexuslab-linux-${{ matrix.arch }}.so out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-hook-${{ matrix.arch }}
+          path: out/
+
+  build-linux-injector:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: build injector node
+        run: |
+          cd linux-injector
+          npm install node-addon-api
+          npx node-gyp configure build
+          ls -la build/Release/
+      - name: stage artifact
+        run: |
+          mkdir -p out
+          cp linux-injector/build/Release/linux_injector.node "out/nexuslab-linux-${{ matrix.arch }}.node"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-injector-${{ matrix.arch }}
+          path: out/
