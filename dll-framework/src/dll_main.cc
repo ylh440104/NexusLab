@@ -14,16 +14,20 @@ nexuslab::SendHook g_sendHook;
 nexuslab::SendHook g_loginHook;
 nexuslab::SendHook g_recvHook;
 nexuslab::SendHook g_testHook;
+nexuslab::SendHook g_recvPathHook;
 nexuslab::HookCapture g_sendCapture;
 nexuslab::HookCapture g_loginCapture;
 nexuslab::HookCapture g_recvCapture;
 nexuslab::HookCapture g_testCapture;
+nexuslab::HookCapture g_recvPathCapture;
 volatile LONG g_loginSeen = 0;
 HANDLE g_worker = nullptr;
 HANDLE g_control = nullptr;
 HANDLE g_recv = nullptr;
 HANDLE g_writer = nullptr;
 HANDLE g_recvPoll = nullptr;
+HANDLE g_recvPathPoll = nullptr;
+HANDLE g_autoHook = nullptr;
 HANDLE g_loginPoll = nullptr;
 volatile LONG g_stopping = 0;
 volatile LONG g_unloadComplete = 0;
@@ -395,6 +399,17 @@ int HookStateReport(void* context, char* outText, size_t textSize,
         AppendText(outText, textSize, &used, " rcn=");
         AppendHex(outText, textSize, &used,
                   nexuslab::HookCaptureCount(&g_recvCapture), 1);
+
+        AppendText(outText, textSize, &used, " rpi=");
+        AppendHex(outText, textSize, &used, g_recvPathHook.installed ? 1 : 0, 1);
+
+        AppendText(outText, textSize, &used, " rpt=");
+        AppendHex(outText, textSize, &used,
+                  reinterpret_cast<unsigned long long>(g_recvPathHook.target), 1);
+
+        AppendText(outText, textSize, &used, " rpn=");
+        AppendHex(outText, textSize, &used,
+                  nexuslab::HookCaptureCount(&g_recvPathCapture), 1);
 
         unsigned long long recvCount = nexuslab::HookCaptureCount(&g_recvCapture);
         if (recvCount != 0) {
@@ -1020,6 +1035,237 @@ DWORD WINAPI LoginHookPoll(LPVOID parameter) {
 
     return 0;
 }
+void ParseSsoString(const unsigned char* base, unsigned long long* outPtr,
+                    unsigned long long* outLen) {
+    *outPtr = 0;
+    *outLen = 0;
+    __try {
+        unsigned char flag = base[0];
+        if ((flag & 1) == 0) {
+            *outPtr = reinterpret_cast<unsigned long long>(base + 1);
+            *outLen = static_cast<unsigned long long>(flag >> 1);
+        } else {
+            *outPtr = *reinterpret_cast<const unsigned long long*>(base + 0x10);
+            *outLen = *reinterpret_cast<const unsigned long long*>(base + 8);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        *outPtr = 0;
+        *outLen = 0;
+    }
+}
+
+bool StartsWithCmd(const char* cmd, unsigned long long len, const char* prefix) {
+    unsigned long long index = 0;
+    while (prefix[index] != 0) {
+        if (index >= len) {
+            return false;
+        }
+        if (cmd[index] != prefix[index]) {
+            return false;
+        }
+        ++index;
+    }
+    return true;
+}
+
+void RecvPacketHandler(unsigned long long first, unsigned long long packetRef,
+                       unsigned long long status, unsigned long long fourth) {
+    (void)first;
+    (void)fourth;
+
+    unsigned long long packet = 0;
+    __try {
+        packet = *reinterpret_cast<const unsigned long long*>(packetRef);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+
+    if (packet == 0) {
+        return;
+    }
+
+    unsigned long long uinPtr = 0;
+    unsigned long long uinLen = 0;
+    unsigned long long cmdPtr = 0;
+    unsigned long long cmdLen = 0;
+
+    ParseSsoString(reinterpret_cast<const unsigned char*>(packet), &uinPtr, &uinLen);
+    ParseSsoString(reinterpret_cast<const unsigned char*>(packet + 0x20), &cmdPtr, &cmdLen);
+
+    if (cmdPtr == 0 || cmdLen == 0) {
+        return;
+    }
+
+    const char* cmd = reinterpret_cast<const char*>(cmdPtr);
+
+    if (StartsWithCmd(cmd, cmdLen, "wtlogin.")) {
+        return;
+    }
+    if (StartsWithCmd(cmd, cmdLen, "trpc.log.")) {
+        return;
+    }
+    if (StartsWithCmd(cmd, cmdLen, "c.login.")) {
+        return;
+    }
+    if (StartsWithCmd(cmd, cmdLen, "QrCode.")) {
+        return;
+    }
+
+    unsigned long long bodyPtr = 0;
+    unsigned long long bodyLen = 0;
+    __try {
+        const unsigned long long* span =
+            *reinterpret_cast<const unsigned long long* const*>(packet + 0x38);
+        if (span != nullptr) {
+            unsigned long long begin = span[0];
+            unsigned long long end = span[1];
+            if (end > begin && (end - begin) <= 65536ULL) {
+                bodyPtr = begin;
+                bodyLen = end - begin;
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        bodyPtr = 0;
+        bodyLen = 0;
+    }
+
+    char cmdText[200];
+    unsigned long long copyLen = cmdLen < 199ULL ? cmdLen : 199ULL;
+    __try {
+        for (unsigned long long i = 0; i < copyLen; ++i) {
+            cmdText[i] = cmd[i];
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    cmdText[copyLen] = 0;
+
+    char uinText[64];
+    unsigned long long uinCopy = uinLen < 63ULL ? uinLen : 63ULL;
+    if (uinPtr != 0) {
+        const char* uinChars = reinterpret_cast<const char*>(uinPtr);
+        __try {
+            for (unsigned long long i = 0; i < uinCopy; ++i) {
+                uinText[i] = uinChars[i];
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            uinCopy = 0;
+        }
+    } else {
+        uinCopy = 0;
+    }
+    uinText[uinCopy] = 0;
+
+    if (bodyPtr != 0 && bodyLen != 0) {
+        nexuslab::EnqueueRecvPacket(&g_server, static_cast<int>(status), cmdText, uinText,
+                                    reinterpret_cast<const uint8_t*>(bodyPtr),
+                                    static_cast<size_t>(bodyLen));
+    } else {
+        nexuslab::EnqueueRecvPacket(&g_server, static_cast<int>(status), cmdText, uinText,
+                                    nullptr, 0);
+    }
+}
+
+DWORD WINAPI AutoHookThread(LPVOID parameter) {
+    (void)parameter;
+
+    for (int attempt = 0; attempt < 60; ++attempt) {
+        if (InterlockedCompareExchange(&g_stopping, 0, 0) != 0) {
+            return 0;
+        }
+
+        if (!g_send.locatorReady) {
+            if (!nexuslab::SendRuntimePrepare(&g_send)) {
+                Sleep(500);
+                continue;
+            }
+        }
+
+        if (!g_sendHook.installed) {
+            nexuslab::SendPath path;
+            if (nexuslab::SendResolvePath(&g_send, "SendSSORequestInternal", &path) &&
+                path.functionStart != nullptr) {
+                size_t prologue = nexuslab::HookMeasurePrologue(
+                    path.functionStart, nexuslab::kHookJumpSize, nexuslab::kHookMaxPrologue);
+                if (prologue != 0) {
+                    nexuslab::HookInstall(&g_sendHook,
+                                          const_cast<unsigned char*>(path.functionStart),
+                                          prologue, &g_sendCapture, 4);
+                }
+            }
+        }
+
+        if (!g_loginHook.installed) {
+            nexuslab::SendPath path;
+            if (nexuslab::SendResolvePath(&g_send, "LoginRequest", &path) &&
+                path.functionStart != nullptr) {
+                size_t prologue = nexuslab::HookMeasurePrologue(
+                    path.functionStart, nexuslab::kHookJumpSize, nexuslab::kHookMaxPrologue);
+                if (prologue != 0) {
+                    nexuslab::HookInstall(&g_loginHook,
+                                          const_cast<unsigned char*>(path.functionStart),
+                                          prologue, &g_loginCapture, 1);
+                }
+            }
+        }
+
+        if (g_sendHook.installed && g_loginHook.installed) {
+            return 0;
+        }
+
+        Sleep(500);
+    }
+
+    return 0;
+}
+
+DWORD WINAPI RecvPathPoll(LPVOID parameter) {
+    (void)parameter;
+
+    while (InterlockedCompareExchange(&g_stopping, 0, 0) == 0) {
+        Sleep(500);
+
+        if (g_recvPathHook.installed) {
+            continue;
+        }
+
+        unsigned long long session = nexuslab::HookCaptureSlot(&g_sendCapture, 0);
+        if (session == 0) {
+            continue;
+        }
+
+        unsigned long long target = 0;
+        __try {
+            target = *reinterpret_cast<const unsigned long long*>(session + 0x88);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            target = 0;
+        }
+
+        if (target < 0x10000ULL) {
+            continue;
+        }
+
+        size_t prologue = nexuslab::HookMeasurePrologue(
+            reinterpret_cast<const unsigned char*>(target), nexuslab::kHookJumpSize,
+            nexuslab::kHookMaxPrologue);
+        if (prologue == 0) {
+            continue;
+        }
+
+        g_recvPathHook.handler = RecvPacketHandler;
+        nexuslab::HookInstall(&g_recvPathHook, reinterpret_cast<void*>(target), prologue,
+                              &g_recvPathCapture, 4);
+    }
+
+    return 0;
+}
+
 DWORD WINAPI RecvHookPoll(LPVOID parameter) {
     (void)parameter;
 
@@ -1141,6 +1387,7 @@ DWORD WINAPI WorkerThread(void* parameter) {
     nexuslab::HookInit(&g_sendHook);
     nexuslab::HookInit(&g_loginHook);
     nexuslab::HookInit(&g_recvHook);
+    nexuslab::HookInit(&g_recvPathHook);
 
     g_server.hookContext = &g_send;
     g_server.hookInstall = HookInstallByName;
@@ -1161,7 +1408,8 @@ DWORD WINAPI WorkerThread(void* parameter) {
     g_control = CreateThread(nullptr, 0, nexuslab::ControlThread, &g_server, 0, nullptr);
     g_recv = CreateThread(nullptr, 0, nexuslab::RecvThread, &g_server, 0, nullptr);
     g_writer = CreateThread(nullptr, 0, nexuslab::WriterThread, &g_server, 0, nullptr);
-    g_recvPoll = CreateThread(nullptr, 0, RecvHookPoll, nullptr, 0, nullptr);
+    g_recvPathPoll = CreateThread(nullptr, 0, RecvPathPoll, nullptr, 0, nullptr);
+    g_autoHook = CreateThread(nullptr, 0, AutoHookThread, nullptr, 0, nullptr);
     g_loginPoll = CreateThread(nullptr, 0, LoginHookPoll, nullptr, 0, nullptr);
     nexuslab::ResidentInit(&g_resident);
     nexuslab::ResidentLoad(&g_resident, kNexuslabResidentImage,
@@ -1260,8 +1508,10 @@ BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
         g_recv = nullptr;
         JoinWorker(g_writer);
         g_writer = nullptr;
-        JoinWorker(g_recvPoll);
-        g_recvPoll = nullptr;
+        JoinWorker(g_recvPathPoll);
+        g_recvPathPoll = nullptr;
+        JoinWorker(g_autoHook);
+        g_autoHook = nullptr;
         JoinWorker(g_loginPoll);
         g_loginPoll = nullptr;
         nexuslab::StopServers(&g_server);

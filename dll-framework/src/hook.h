@@ -14,6 +14,9 @@ struct HookCapture {
     unsigned char bytesB[24];
 };
 
+typedef void (*HookHandler)(unsigned long long a, unsigned long long b,
+                            unsigned long long c, unsigned long long d);
+
 struct SendHook {
     unsigned char* target;
     unsigned char* trampoline;
@@ -21,6 +24,7 @@ struct SendHook {
     size_t trampolineLength;
     unsigned char savedBytes[kHookMaxPrologue];
     HookCapture* capture;
+    HookHandler handler;
     bool installed;
     unsigned long lastError;
 };

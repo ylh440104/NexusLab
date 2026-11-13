@@ -846,8 +846,8 @@ bool EnqueueRecvPacket(ServerContext* ctx, int32_t error, const char* cmd, const
         return false;
     }
 
-    if (bodyLength > 192) {
-        bodyLength = 192;
+    if (bodyLength > 8192) {
+        bodyLength = 8192;
     }
 
     size_t cmdLength = StringLength(cmd);
@@ -866,7 +866,7 @@ bool EnqueueRecvPacket(ServerContext* ctx, int32_t error, const char* cmd, const
     frame.value0 = static_cast<unsigned long long>(
         InterlockedIncrement(&ctx->recvSeq));
 
-    uint8_t packet[kHeaderSize + 192 + 64 + 64];
+    uint8_t packet[kHeaderSize + 8192 + 64 + 256];
     size_t cursor = EncodeHeader(frame, packet);
 
     if (cursor + cmdLength + uinLength + bodyLength > sizeof(packet)) {
@@ -1198,7 +1198,7 @@ DWORD WINAPI RecvThread(LPVOID parameter) {
 
 DWORD WINAPI WriterThread(LPVOID parameter) {
     ServerContext* ctx = static_cast<ServerContext*>(parameter);
-    uint8_t pending[kHeaderSize + 512];
+    uint8_t pending[kHeaderSize + 8192];
     size_t pendingLength = 0;
     bool hasPending = false;
     while (true) {

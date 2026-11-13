@@ -68,7 +68,7 @@ struct ServerContext {
     int (*sendReply)(void* context, int* outError, uint8_t* body, uint32_t bodyCapacity,
                      uint32_t* outBodyLength);
 
-    char sendQueue[kMaxQueueItems][kHeaderSize + 512];
+    char sendQueue[kMaxQueueItems][kHeaderSize + 8192];
     size_t sendQueueLength[kMaxQueueItems];
     size_t sendQueueHead;
     size_t sendQueueCount;

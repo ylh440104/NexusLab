@@ -115,6 +115,7 @@ void HookInit(SendHook* hook) {
     hook->patchLength = 0;
     hook->trampolineLength = 0;
     hook->capture = nullptr;
+    hook->handler = nullptr;
     hook->installed = false;
     hook->lastError = 0;
 
@@ -172,6 +173,86 @@ bool HookInstall(SendHook* hook, void* targetAddress, size_t prologueLength,
         trampoline[cursor + index] = target[index];
     }
     cursor += prologueLength;
+
+    if (hook->handler != nullptr) {
+        static const unsigned char pushAll[11] = {
+            0x50, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53
+        };
+        for (size_t index = 0; index < sizeof(pushAll); ++index) {
+            trampoline[cursor + index] = pushAll[index];
+        }
+        cursor += sizeof(pushAll);
+
+        static const unsigned char subRsp[7] = { 0x48, 0x81, 0xEC, 0x60, 0x00, 0x00, 0x00 };
+        for (size_t index = 0; index < sizeof(subRsp); ++index) {
+            trampoline[cursor + index] = subRsp[index];
+        }
+        cursor += sizeof(subRsp);
+
+        for (int slot = 0; slot < 6; ++slot) {
+            trampoline[cursor + 0] = 0xF3;
+            trampoline[cursor + 1] = 0x0F;
+            trampoline[cursor + 2] = 0x7F;
+            trampoline[cursor + 3] = 0x44;
+            trampoline[cursor + 4] = 0x24;
+            trampoline[cursor + 5] = static_cast<unsigned char>(slot * 16);
+            cursor += 6;
+        }
+
+        static const unsigned char movRcx[8] = { 0x48, 0x8B, 0x8C, 0x24, 0x88, 0x00, 0x00, 0x00 };
+        static const unsigned char movRdx[8] = { 0x48, 0x8B, 0x94, 0x24, 0x80, 0x00, 0x00, 0x00 };
+        static const unsigned char movR8[8] = { 0x4C, 0x8B, 0x84, 0x24, 0x78, 0x00, 0x00, 0x00 };
+        static const unsigned char movR9[8] = { 0x4C, 0x8B, 0x8C, 0x24, 0x70, 0x00, 0x00, 0x00 };
+        const unsigned char* moves[4];
+        moves[0] = movRcx;
+        moves[1] = movRdx;
+        moves[2] = movR8;
+        moves[3] = movR9;
+        for (int slot = 0; slot < 4; ++slot) {
+            for (size_t index = 0; index < 8; ++index) {
+                trampoline[cursor + index] = moves[slot][index];
+            }
+            cursor += 8;
+        }
+
+        trampoline[cursor + 0] = 0x48;
+        trampoline[cursor + 1] = 0xB8;
+        WriteU64(trampoline + cursor + 2,
+                 reinterpret_cast<unsigned long long>(hook->handler));
+        cursor += 10;
+
+        trampoline[cursor + 0] = 0xFF;
+        trampoline[cursor + 1] = 0xD0;
+        cursor += 2;
+
+        for (int slot = 0; slot < 6; ++slot) {
+            trampoline[cursor + 0] = 0xF3;
+            trampoline[cursor + 1] = 0x0F;
+            trampoline[cursor + 2] = 0x6F;
+            trampoline[cursor + 3] = 0x44;
+            trampoline[cursor + 4] = 0x24;
+            trampoline[cursor + 5] = static_cast<unsigned char>(slot * 16);
+            cursor += 6;
+        }
+
+        static const unsigned char addRsp[7] = { 0x48, 0x81, 0xC4, 0x60, 0x00, 0x00, 0x00 };
+        for (size_t index = 0; index < sizeof(addRsp); ++index) {
+            trampoline[cursor + index] = addRsp[index];
+        }
+        cursor += sizeof(addRsp);
+
+        static const unsigned char popHigh[8] = { 0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58 };
+        for (size_t index = 0; index < sizeof(popHigh); ++index) {
+            trampoline[cursor + index] = popHigh[index];
+        }
+        cursor += sizeof(popHigh);
+
+        static const unsigned char popLow[3] = { 0x5A, 0x59, 0x58 };
+        for (size_t index = 0; index < sizeof(popLow); ++index) {
+            trampoline[cursor + index] = popLow[index];
+        }
+        cursor += sizeof(popLow);
+    }
 
     trampoline[cursor + 0] = 0x50;
     cursor += 1;
