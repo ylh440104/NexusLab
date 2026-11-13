@@ -46,7 +46,12 @@ function makeDefaultStatusCommand(): StatusCommandConfig {
     return { ...DEFAULT_STATUS_COMMAND };
 }
 
+function generateAccessToken(): string {
+    return randomBytes(DEFAULT_ACCESS_TOKEN_BYTES).toString('base64url');
+}
+
 export function makeDefaultOneBotConfig(): OneBotConfig {
+    const sharedAccessToken = generateAccessToken();
     return {
         networks: {
             httpServers: [
@@ -57,7 +62,7 @@ export function makeDefaultOneBotConfig(): OneBotConfig {
                     path: '/',
                     enableWebSocket: false,
                     enableSse: false,
-                    accessToken: generateAccessToken(),
+                    accessToken: sharedAccessToken,
                     messageFormat: 'array',
                     reportSelfMessage: false,
                 },
@@ -70,7 +75,7 @@ export function makeDefaultOneBotConfig(): OneBotConfig {
                     port: 3001,
                     path: '/',
                     role: 'Universal',
-                    accessToken: generateAccessToken(),
+                    accessToken: sharedAccessToken,
                     messageFormat: 'array',
                     reportSelfMessage: false,
                 },
@@ -83,9 +88,6 @@ export function makeDefaultOneBotConfig(): OneBotConfig {
     };
 }
 
-function generateAccessToken(): string {
-    return randomBytes(DEFAULT_ACCESS_TOKEN_BYTES).toString('base64url');
-}
 
 export interface LoadOneBotConfigOptions {
     persistDefaults?: boolean;
