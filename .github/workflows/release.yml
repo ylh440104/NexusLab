@@ -105,12 +105,10 @@ jobs:
         run: |
           call "%VCVARS%" x64
           if not exist dll-framework\build mkdir dll-framework\build
-          python extract_resident.py packages\runtime\native\nexuslab-win32-x64.dll dll-framework\build\resident_embed.dll
-          python dll-framework\tools\gen_blob.py dll-framework\build\resident_embed.dll dll-framework\build\resident_blob.cpp
           cd dll-framework\build
           cl /LD /MT /O2 /GS- /guard:cf- /EHsc /std:c++17 /D_HAS_EXCEPTIONS=0 /DNDEBUG /DWIN32_LEAN_AND_MEAN /I..\src ^
-             ..\src\dll_main.cc ..\src\protocol.cc ..\src\server.cc ..\src\resident.cc ^
-             ..\src\locator.cc ..\src\send_path.cc ..\src\hook.cc resident_blob.cpp ^
+             ..\src\dll_main.cc ..\src\protocol.cc ..\src\server.cc ^
+             ..\src\locator.cc ..\src\send_path.cc ..\src\hook.cc ^
              /Fe:nexuslab-win32-x64.dll ^
              /link kernel32.lib /DLL ^
              /IGNORE:4075

@@ -63,12 +63,7 @@ jobs:
           if (-not $found) { throw 'vcvarsall not found' }
           "VCVARS=$found" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: generate resident blob
-        shell: pwsh
-        run: |
           New-Item -ItemType Directory -Path dll-framework/build -Force | Out-Null
-          python extract_resident.py packages/runtime/native/nexuslab-win32-x64.dll dll-framework/build/resident_embed.dll
-          python dll-framework/tools/gen_blob.py dll-framework/build/resident_embed.dll dll-framework/build/resident_blob.cpp
 
       - name: build dll
         shell: cmd
@@ -76,8 +71,8 @@ jobs:
           call "%VCVARS%" x64
           cd dll-framework\build
           cl /LD /MT /O2 /GS- /guard:cf- /EHsc /std:c++17 /D_HAS_EXCEPTIONS=0 /DNDEBUG /DWIN32_LEAN_AND_MEAN /I..\src ^
-             ..\src\dll_main.cc ..\src\protocol.cc ..\src\server.cc ..\src\resident.cc ^
-             ..\src\locator.cc ..\src\send_path.cc ..\src\hook.cc resident_blob.cpp ^
+             ..\src\dll_main.cc ..\src\protocol.cc ..\src\server.cc ^
+             ..\src\locator.cc ..\src\send_path.cc ..\src\hook.cc ^
              /Fe:nexuslab-win32-x64.dll ^
              /link kernel32.lib /DLL ^
              /IGNORE:4075

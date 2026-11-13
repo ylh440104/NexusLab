@@ -1,14 +1,12 @@
 #include "hook.h"
 #include "protocol.h"
 #include "resident.h"
-#include "resident_blob.h"
 #include "send_path.h"
 #include "server.h"
 
 namespace {
 
 nexuslab::ServerContext g_server;
-nexuslab::ResidentModule g_resident;
 nexuslab::SendRuntime g_send;
 nexuslab::SendHook g_sendHook;
 nexuslab::SendHook g_loginHook;
@@ -84,21 +82,15 @@ extern "C" __declspec(dllexport) void __cdecl nexuslab_set_login_uin(long long v
 }
 
 extern "C" __declspec(dllexport) int __cdecl nexuslab_resident_state() {
-    if (!g_resident.loaded) {
-        return -1;
-    }
-    if (!g_resident.abiChecked) {
-        return -2;
-    }
-    return 1;
+    return 0;
 }
 
 extern "C" __declspec(dllexport) unsigned __int64 __cdecl nexuslab_resident_active() {
-    return nexuslab::ResidentActiveCount(&g_resident);
+    return 0;
 }
 
 extern "C" __declspec(dllexport) unsigned long __cdecl nexuslab_resident_error() {
-    return g_resident.lastError;
+    return 0;
 }
 
 extern "C" __declspec(dllexport) int __cdecl nexuslab_send_prepare() {
@@ -1386,7 +1378,6 @@ DWORD WINAPI WorkerThread(void* parameter) {
         return 1;
     }
 
-    g_server.residentContext = &g_resident;
     g_server.bindDispatch = BindDispatch;
     g_server.locateContext = &g_send;
     g_server.locateFunction = LocateFunction;
@@ -1419,28 +1410,12 @@ DWORD WINAPI WorkerThread(void* parameter) {
     g_recvPoll = CreateThread(nullptr, 0, RecvHookPoll, nullptr, 0, nullptr);
     g_autoHook = CreateThread(nullptr, 0, AutoHookThread, nullptr, 0, nullptr);
     g_loginPoll = CreateThread(nullptr, 0, LoginHookPoll, nullptr, 0, nullptr);
-    nexuslab::ResidentInit(&g_resident);
-    nexuslab::ResidentLoad(&g_resident, kNexuslabResidentImage,
-                           static_cast<size_t>(kNexuslabResidentImageSize));
-    int residentState = -1;
-    if (g_resident.loaded) {
-        residentState = g_resident.abiChecked ? 1 : -2;
-    }
-    InterlockedExchange(&g_server.residentState, residentState);
-    InterlockedExchange(&g_server.residentError, static_cast<LONG>(g_resident.lastError));
-    g_server.residentActive = nexuslab::ResidentActiveCount(&g_resident);
-
-    while (InterlockedCompareExchange(&g_stopping, 1, 1) == 0) {
+while (InterlockedCompareExchange(&g_stopping, 1, 1) == 0) {
         Sleep(100);
     }
 
     if (g_server.stopEvent != nullptr) {
         SetEvent(g_server.stopEvent);
-    }
-
-    if (g_resident.loaded) {
-        nexuslab::ResidentShutdown(&g_resident);
-        nexuslab::ResidentUnload(&g_resident);
     }
 
     return 0;
@@ -1493,7 +1468,6 @@ int BindDispatch(void* context, unsigned int kind, unsigned int* outKind,
 BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
-        nexuslab::ResidentInit(&g_resident);
         g_worker = CreateThread(nullptr, 0, WorkerThread, nullptr, 0, nullptr);
         return TRUE;
     }
