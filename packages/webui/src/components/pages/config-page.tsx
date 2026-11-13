@@ -20,7 +20,7 @@ import {
     applySharedDefaultAccessToken,
     detectSplitDefaultAccessToken,
     type SplitDefaultTokenReport,
-} from '@nexuslab/onebot/config';
+} from '@/lib/split-access-token';
 import { useOneBotInstanceConfig } from '@/hooks/use-onebot-instance-config';
 import { useAppState } from '@/contexts/AppStateContext';
 import { useLayout } from '@/contexts/LayoutContext';
@@ -157,18 +157,21 @@ export function ConfigPage() {
     }, [config, loading, selectedUin]);
 
     const acceptTokenMigration = useCallback(() => {
-        if (!migrationReport || !config) {
+        const uin = selectedUin;
+        if (!migrationReport || !config || !uin) {
             return;
         }
         const next = applySharedDefaultAccessToken(config, migrationReport);
-        promotedUinsRef.current.add(selectedUin);
+        promotedUinsRef.current.add(uin);
         setMigrationReport(null);
         setConfig(next);
         void save(next);
     }, [config, migrationReport, save, selectedUin, setConfig]);
 
     const declineTokenMigration = useCallback(() => {
-        promotedUinsRef.current.add(selectedUin);
+        if (selectedUin) {
+            promotedUinsRef.current.add(selectedUin);
+        }
         setMigrationReport(null);
     }, [selectedUin]);
 
