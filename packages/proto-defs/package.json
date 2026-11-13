@@ -1,7 +1,7 @@
 {
-  "license": "GPL-2.0",
+  "license": "AGPL-3.0",
   "name": "@nexuslab/proto-defs",
-  "version": "2.4.6",
+  "version": "2.5.0",
   "private": true,
   "type": "module",
   "description": "NexusLab QQ/Lagrange wire-protobuf type definitions. Pure TypeScript interfaces with proton's `pb<N, T>` marker types — `@nexuslab/proton`'s vite plugin compiles them into zero-runtime encoder/decoder functions at the call sites in `@nexuslab/core` (and any downstream consumer). Exposed as per-file subpaths (`@nexuslab/proto-defs/oidb`, `@nexuslab/proto-defs/message`, …) so the import-site shape mirrors the legacy `bridge/proto/proton/*` layout and avoids name collisions across files (notably `highway.ts` and `oidb-actions/media.ts` share NTV2-prefixed names).",

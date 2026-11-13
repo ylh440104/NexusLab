@@ -1,7 +1,7 @@
 {
-  "license": "GPL-2.0",
+  "license": "AGPL-3.0",
   "name": "@nexuslab/sqlite",
-  "version": "2.4.6",
+  "version": "2.5.0",
   "private": true,
   "type": "module",
   "description": "NexusLab asynchronous SQLite facade, native loader and release assets.",

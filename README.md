@@ -96,11 +96,11 @@ pnpm test
 ## 使用边界与许可
 
 > [!IMPORTANT]
-> NexusLab 以 **GNU General Public License version 2（GPL-2.0）** 授权。你可以自由使用、修改并再分发本软件，再分发时须保留本许可并提供对应的完整源码。
+> NexusLab 以 **GNU Affero General Public License version 3（AGPL-3.0）** 授权。你可以自由使用、修改并再分发本软件，再分发时须保留本许可并提供对应的完整源码。**若你将修改后的版本作为网络服务对外提供，也必须向使用者提供完整源码。**
 
 完整条款见 [`LICENSE`](LICENSE)；二进制发行包另受 [`EULA.md`](EULA.md) 与 [`PRIVACY.md`](PRIVACY.md) 约束。
 
-NexusLab is licensed under the GNU General Public License version 2 (GPL-2.0). You may use, modify, and redistribute it; redistribution must retain the license and provide the corresponding complete source code.
+NexusLab is licensed under the GNU Affero General Public License version 3 (AGPL-3.0). You may use, modify, and redistribute it; redistribution must retain the license and provide the corresponding complete source code. **If you make a modified version available as a network service, you must also offer its complete source code to users of that service.**
 
 ## 致谢
 
