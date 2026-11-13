@@ -29,6 +29,7 @@ HANDLE g_recvPoll = nullptr;
 HANDLE g_recvPathPoll = nullptr;
 HANDLE g_autoHook = nullptr;
 HANDLE g_loginPoll = nullptr;
+CRITICAL_SECTION g_scanLock;
 volatile LONG g_stopping = 0;
 volatile LONG g_unloadComplete = 0;
 volatile LONG g_sendCaptureSynthetic = 0;
@@ -202,8 +203,10 @@ int LocateFunction(void* context, const char* name, char* outText, size_t textSi
         return 0;
     }
 
+    EnterCriticalSection(&g_scanLock);
     nexuslab::SendPath path;
     bool resolved = nexuslab::SendResolvePath(runtime, name, &path);
+    LeaveCriticalSection(&g_scanLock);
 
     if (path.functionStart != nullptr) {
         *outTarget = reinterpret_cast<unsigned long long>(path.functionStart);
@@ -1179,14 +1182,16 @@ DWORD WINAPI AutoHookThread(LPVOID parameter) {
             return 0;
         }
 
-        if (!g_send.locatorReady) {
-            if (!nexuslab::SendRuntimePrepare(&g_send)) {
-                Sleep(500);
-                continue;
-            }
+        EnterCriticalSection(&g_scanLock);
+        bool prepared = g_send.locatorReady || nexuslab::SendRuntimePrepare(&g_send);
+        if (!prepared) {
+            LeaveCriticalSection(&g_scanLock);
+            Sleep(500);
+            continue;
         }
 
-        if (!g_sendHook.installed) {
+        bool sendDone = g_sendHook.installed;
+        if (!sendDone) {
             nexuslab::SendPath path;
             if (nexuslab::SendResolvePath(&g_send, "SendSSORequestInternal", &path) &&
                 path.functionStart != nullptr) {
@@ -1200,7 +1205,8 @@ DWORD WINAPI AutoHookThread(LPVOID parameter) {
             }
         }
 
-        if (!g_loginHook.installed) {
+        bool loginDone = g_loginHook.installed;
+        if (!loginDone) {
             nexuslab::SendPath path;
             if (nexuslab::SendResolvePath(&g_send, "LoginRequest", &path) &&
                 path.functionStart != nullptr) {
@@ -1213,6 +1219,7 @@ DWORD WINAPI AutoHookThread(LPVOID parameter) {
                 }
             }
         }
+        LeaveCriticalSection(&g_scanLock);
 
         if (g_sendHook.installed && g_loginHook.installed) {
             return 0;
@@ -1384,6 +1391,7 @@ DWORD WINAPI WorkerThread(void* parameter) {
     g_server.locateContext = &g_send;
     g_server.locateFunction = LocateFunction;
 
+    InitializeCriticalSection(&g_scanLock);
     nexuslab::HookInit(&g_sendHook);
     nexuslab::HookInit(&g_loginHook);
     nexuslab::HookInit(&g_recvHook);
