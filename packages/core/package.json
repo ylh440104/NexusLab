@@ -1,7 +1,7 @@
 {
   "license": "AGPL-3.0",
   "name": "@nexuslab/core",
-  "version": "2.5.2",
+  "version": "2.5.3",
   "description": "NexusLab core - NTQQ packet sniffer with Node.js native addon",
   "private": true,
   "type": "module",

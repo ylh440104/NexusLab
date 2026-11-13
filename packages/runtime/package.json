@@ -1,7 +1,7 @@
 {
   "license": "AGPL-3.0",
   "name": "@nexuslab/runtime",
-  "version": "2.5.2",
+  "version": "2.5.3",
   "private": true,
   "type": "module",
   "main": "index.mjs",
