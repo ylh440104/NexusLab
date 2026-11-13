@@ -25,6 +25,32 @@ public:
         error_ = 0;
         message_.clear();
         emitFrames_.clear();
+        if (state_ == State::Header && headGot_ > 0) {
+            size_t fill = size < (10 - headGot_) ? size : (10 - headGot_);
+            std::memcpy(headBuf_ + headGot_, data, fill);
+            size_t total = headGot_ + fill;
+            size_t consumed = 0;
+            bool ok = Step(headBuf_, total, &consumed);
+            if (frameDone_) {
+                frameDone_ = false;
+                EmitFrame out;
+                out.fin = lastFin_;
+                out.rsv = lastRsv_;
+                out.opcode = lastOpcode_;
+                out.payload.assign(frameBuf_.begin(), frameBuf_.begin() + static_cast<long>(frameLen_));
+                emitFrames_.push_back(std::move(out));
+            }
+            if (ok && consumed <= total) {
+                offset = consumed;
+                headGot_ = 0;
+            } else if (!ok && consumed == 0) {
+                headGot_ = total < 10 ? total : 10;
+                offset = size;
+            } else {
+                headGot_ = 0;
+                offset = consumed < size ? consumed : size;
+            }
+        }
         while (offset < size && error_ == 0) {
             size_t consumed = 0;
             State before = state_;
@@ -39,6 +65,14 @@ public:
                 emitFrames_.push_back(std::move(out));
             }
             if (!ok) {
+                if (state_ == State::Header && consumed == 0) {
+                    size_t remain = size - offset;
+                    if (remain > 0 && remain < 10) {
+                        std::memcpy(headBuf_, data + offset, remain);
+                        headGot_ = remain;
+                        offset += remain;
+                    }
+                }
                 break;
             }
             offset += consumed;
@@ -237,6 +271,8 @@ private:
     }
 
     enum class State { Header, Extended16, Extended64, Mask, Payload };
+    uint8_t headBuf_[10] = { 0 };
+    size_t headGot_ = 0;
     bool isServer_;
     uint64_t maxPayload_;
     int allowedRsv_;
