@@ -7,68 +7,69 @@ namespace {
 
 class Parser {
 public:
-    Parser(bool isServer, size_t maxPayload, int allowedRsv)
-        : isServer_(isServer), maxPayload_(maxPayload), allowedRsv_(allowedRsv) {}
+    Parser(bool isServer, long long maxPayload, int allowedRsv)
+        : isServer_(isServer),
+          maxPayload_(maxPayload < 0 ? 0 : static_cast<uint64_t>(maxPayload)),
+          allowedRsv_(allowedRsv & 0x70) {}
 
     Napi::Object Push(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
-        Napi::Object result = Napi::Object::New(env);
-        Napi::Array frames = Napi::Array::New(env);
         if (info.Length() < 1 || !info[0].IsBuffer()) {
-            Fail(env, result, frames, 1002, "Parser.push expects a Buffer");
-            return result;
+            Napi::TypeError::New(env, "Parser.push expects a Buffer").ThrowAsJavaScriptException();
+            return Napi::Object::New(env);
         }
         Napi::Buffer<uint8_t> chunk = info[0].As<Napi::Buffer<uint8_t>>();
         const uint8_t* data = chunk.Data();
         size_t size = chunk.Length();
         size_t offset = 0;
-        while (offset < size) {
+        error_ = 0;
+        message_.clear();
+        while (offset < size && error_ == 0) {
             size_t consumed = 0;
             if (!Step(data + offset, size - offset, &consumed)) {
                 break;
             }
+            if (consumed == 0 && !frameDone_) {
+                break;
+            }
             offset += consumed;
             if (frameDone_) {
-                Napi::Object frame = Napi::Object::New(env);
-                frame.Set("fin", Napi::Boolean::New(env, lastFin_));
-                frame.Set("opcode", Napi::Number::New(env, static_cast<double>(opcode_)));
-                if (lastRsv_ != 0) {
-                    frame.Set("rsv", Napi::Number::New(env, static_cast<double>(lastRsv_)));
-                }
-                frame.Set("payload", Napi::Buffer<uint8_t>::Copy(env, frameBuf_.data(), frameLen_));
-                frames.Set(frames.Length(), frame);
                 frameDone_ = false;
-                frameLen_ = 0;
-                got_ = 0;
-                if (opcode_ == OP_CONTROL_CLOSE) {
-                    break;
-                }
+                emitFrame_ = true;
             }
         }
+        Napi::Object result = Napi::Object::New(env);
+        Napi::Array frames = Napi::Array::New(env);
+        if (emitFrame_) {
+            Napi::Object frame = Napi::Object::New(env);
+            frame.Set("fin", Napi::Boolean::New(env, lastFin_));
+            frame.Set("rsv", Napi::Number::New(env, static_cast<double>(lastRsv_)));
+            frame.Set("opcode", Napi::Number::New(env, static_cast<double>(lastOpcode_)));
+            frame.Set("payload", Napi::Buffer<uint8_t>::Copy(env, frameBuf_.data(), frameLen_));
+            frames.Set(frames.Length(), frame);
+        }
+        result.Set("frames", frames);
         if (error_ != 0) {
-            result.Set("frames", frames);
             result.Set("error", Napi::Boolean::New(env, true));
             result.Set("code", Napi::Number::New(env, static_cast<double>(error_)));
             result.Set("message", Napi::String::New(env, message_.c_str()));
-            return result;
         }
-        result.Set("frames", frames);
         return result;
     }
 
 private:
-    enum {
-        OP_CONTROL_CLOSE = 0x8,
-    };
+    void Fail(int code, const char* msg) {
+        error_ = code;
+        message_ = msg;
+    }
 
     bool Step(const uint8_t* data, size_t size, size_t* consumed) {
         if (state_ == State::Payload) {
             size_t need = frameLen_ - got_;
             size_t take = need < size ? need : size;
             if (masked_) {
-                const uint8_t* mask = mask_;
                 for (size_t i = 0; i < take; ++i) {
-                    frameBuf_[got_ + i] = data[i] ^ mask[(got_ + i) & 3];
+                    frameBuf_[got_ + i] = data[i] ^ mask_[(got_ + i) & 3];
                 }
             } else {
                 std::memcpy(frameBuf_.data() + got_, data, take);
@@ -91,44 +92,54 @@ private:
             uint8_t b1 = data[1];
             lastFin_ = (b0 & 0x80) != 0;
             int rsv = (b0 >> 4) & 0x7;
-            lastRsv_ = rsv;
-            opcode_ = b0 & 0x0F;
-            masked_ = (b1 & 0x80) != 0;
+            int opcode = b0 & 0x0F;
+            bool masked = (b1 & 0x80) != 0;
             uint64_t len7 = b1 & 0x7F;
-            if (rsv != 0 && (rsv & allowedRsv_) != rsv) {
-                error_ = 1002;
-                message_ = "Unexpected RSV bits";
+
+            if (opcode >= 0x3 && opcode <= 0x7 || opcode >= 0xB && opcode <= 0xF) {
+                Fail(1002, "Unknown opcode");
                 return false;
             }
-            if (opcode_ >= OP_CONTROL_CLOSE) {
+            bool isControl = opcode >= 0x8;
+            if (isControl) {
                 if (rsv != 0) {
-                    error_ = 1002;
-                    message_ = "Control frame RSV bits must be zero";
+                    Fail(1002, "Control frame RSV bits must be zero");
                     return false;
                 }
                 if (!lastFin_) {
-                    error_ = 1002;
-                    message_ = "Fragmented control frame";
+                    Fail(1002, "Fragmented control frame");
+                    return false;
+                }
+                if (len7 >= 126) {
+                    Fail(1002, "Control frame too large");
+                    return false;
+                }
+            } else {
+                if (rsv != 0 && (rsv & allowedRsv_) != rsv) {
+                    Fail(1002, "Unexpected RSV bits");
                     return false;
                 }
             }
-            if (isServer_ && !masked_) {
-                error_ = 1002;
-                message_ = "Expected masked frame from client";
+            if (isServer_ && !masked) {
+                Fail(1002, "Expected masked frame from client");
                 return false;
             }
-            if (!isServer_ && masked_) {
-                error_ = 1002;
-                message_ = "Server must not mask frames";
+            if (!isServer_ && masked) {
+                Fail(1002, "Server must not mask frames");
                 return false;
             }
+
+            lastRsv_ = rsv;
+            lastOpcode_ = opcode;
+            masked_ = masked;
             if (len7 < 126) {
-                frameLen_ = static_cast<size_t>(len7);
-                state_ = State::Mask;
-                *consumed = 2;
-                return true;
+                return FinishHeader(data + 2, size - 2, len7, 0, consumed, 2);
             }
             if (len7 == 126) {
+                if (isControl) {
+                    Fail(1002, "Control frame too large");
+                    return false;
+                }
                 state_ = State::Extended16;
                 *consumed = 2;
                 return true;
@@ -143,10 +154,12 @@ private:
                 *consumed = 0;
                 return false;
             }
-            frameLen_ = (static_cast<size_t>(data[0]) << 8) | data[1];
-            state_ = State::Mask;
-            *consumed = 2;
-            return true;
+            uint64_t len = (static_cast<uint64_t>(data[0]) << 8) | data[1];
+            if (len < 126) {
+                Fail(1002, "Non-minimal 16-bit length");
+                return false;
+            }
+            return FinishHeader(data + 2, size - 2, len, 0, consumed, 2);
         }
 
         if (state_ == State::Extended64) {
@@ -159,14 +172,14 @@ private:
                 len = (len << 8) | data[i];
             }
             if (len & 0x8000000000000000ULL) {
-                error_ = 1002;
-                message_ = "Payload length top bit set";
+                Fail(1002, "Payload length top bit set");
                 return false;
             }
-            frameLen_ = static_cast<size_t>(len);
-            state_ = State::Mask;
-            *consumed = 8;
-            return true;
+            if (len < 65536) {
+                Fail(1002, "Non-minimal 64-bit length");
+                return false;
+            }
+            return FinishHeader(data + 8, size - 8, len, 0, consumed, 8);
         }
 
         if (state_ == State::Mask) {
@@ -180,22 +193,33 @@ private:
             } else {
                 *consumed = 0;
             }
-            if (frameLen_ > maxPayload_) {
-                error_ = 1009;
-                message_ = "Payload exceeds configured max";
-                return false;
-            }
             if (frameLen_ == 0) {
                 frameDone_ = true;
                 state_ = State::Header;
                 return true;
             }
             EnsureFrameBuffer(frameLen_);
+            got_ = 0;
             state_ = State::Payload;
             return true;
         }
         *consumed = 0;
         return false;
+    }
+
+    bool FinishHeader(const uint8_t* data, size_t size, uint64_t len, int unused,
+                      size_t* consumed, size_t headerConsumed) {
+        (void)unused;
+        if (len > maxPayload_) {
+            Fail(1009, "Payload exceeds configured max");
+            return false;
+        }
+        frameLen_ = static_cast<size_t>(len);
+        state_ = State::Mask;
+        *consumed = headerConsumed;
+        (void)data;
+        (void)size;
+        return true;
     }
 
     void EnsureFrameBuffer(size_t len) {
@@ -204,16 +228,9 @@ private:
         }
     }
 
-    void Fail(Napi::Env env, Napi::Object result, Napi::Array frames, int code, const char* msg) {
-        result.Set("frames", frames);
-        result.Set("error", Napi::Boolean::New(env, true));
-        result.Set("code", Napi::Number::New(env, static_cast<double>(code)));
-        result.Set("message", Napi::String::New(env, msg));
-    }
-
     enum class State { Header, Extended16, Extended64, Mask, Payload };
     bool isServer_;
-    size_t maxPayload_;
+    uint64_t maxPayload_;
     int allowedRsv_;
     State state_ = State::Header;
     bool masked_ = false;
@@ -221,9 +238,10 @@ private:
     size_t frameLen_ = 0;
     size_t got_ = 0;
     bool frameDone_ = false;
+    bool emitFrame_ = false;
     bool lastFin_ = false;
     int lastRsv_ = 0;
-    int opcode_ = 0;
+    int lastOpcode_ = 0;
     int error_ = 0;
     std::string message_;
     std::vector<uint8_t> frameBuf_;
@@ -240,8 +258,8 @@ public:
     }
     ParserWrap(const Napi::CallbackInfo& info) : Napi::ObjectWrap<ParserWrap>(info) {
         Napi::Env env = info.Env();
-        bool isServer = false;
-        size_t maxPayload = 16 * 1024 * 1024;
+        bool isServer = true;
+        long long maxPayload = 0;
         int allowedRsv = 0;
         if (info.Length() >= 1 && info[0].IsObject()) {
             Napi::Object opts = info[0].As<Napi::Object>();
@@ -249,7 +267,8 @@ public:
                 isServer = opts.Get("isServer").ToBoolean().Value();
             }
             if (opts.Has("maxPayload")) {
-                maxPayload = static_cast<size_t>(opts.Get("maxPayload").As<Napi::Number>().Uint32Value());
+                Napi::Number n = opts.Get("maxPayload").As<Napi::Number>();
+                maxPayload = static_cast<long long>(n.Int64Value());
             }
             if (opts.Has("allowedRsv")) {
                 allowedRsv = static_cast<int>(opts.Get("allowedRsv").As<Napi::Number>().Int32Value());
@@ -268,8 +287,7 @@ private:
 Napi::Value BuildFrame(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 3 || !info[0].IsNumber() || !info[1].IsBoolean() || !info[2].IsBuffer()) {
-        Napi::TypeError::New(env, "buildFrame(opcode, fin, payload, maskKey, rsv) expects (number, boolean, Buffer, Buffer|null, number)")
-            .ThrowAsJavaScriptException();
+        Napi::TypeError::New(env, "buildFrame: bad args").ThrowAsJavaScriptException();
         return env.Undefined();
     }
     int opcode = info[0].As<Napi::Number>().Int32Value();
@@ -287,7 +305,7 @@ Napi::Value BuildFrame(const Napi::CallbackInfo& info) {
     }
     int rsv = 0;
     if (info.Length() >= 5 && info[4].IsNumber()) {
-        rsv = info[4].As<Napi::Number>().Int32Value();
+        rsv = static_cast<int>(info[4].As<Napi::Number>().Int32Value());
     }
 
     size_t len = payload.Length();
@@ -305,7 +323,7 @@ Napi::Value BuildFrame(const Napi::CallbackInfo& info) {
     uint8_t* outData = out.Data();
     const uint8_t* in = payload.Data();
 
-    uint8_t b0 = static_cast<uint8_t>((fin ? 0x80 : 0x00) | ((rsv << 4) & 0x70) | (opcode & 0x0F));
+    uint8_t b0 = static_cast<uint8_t>((fin ? 0x80 : 0x00) | (rsv & 0x70) | (opcode & 0x0F));
     uint8_t b1 = hasMask ? 0x80 : 0x00;
     outData[0] = b0;
     if (len < 126) {
@@ -336,7 +354,7 @@ Napi::Value BuildFrame(const Napi::CallbackInfo& info) {
 Napi::Value ComputeAcceptKey(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsString()) {
-        Napi::TypeError::New(env, "computeAcceptKey(key) expects a string").ThrowAsJavaScriptException();
+        Napi::TypeError::New(env, "computeAcceptKey: expected string").ThrowAsJavaScriptException();
         return env.Undefined();
     }
     std::string key = info[0].As<Napi::String>().Utf8Value();
