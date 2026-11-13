@@ -6,6 +6,13 @@
 namespace {
 
 class Parser {
+    struct EmitFrame {
+        bool fin;
+        int rsv;
+        int opcode;
+        std::vector<uint8_t> payload;
+    };
+
 public:
     Parser(bool isServer, long long maxPayload, int allowedRsv)
         : isServer_(isServer),
@@ -21,56 +28,40 @@ public:
         Napi::Buffer<uint8_t> chunk = info[0].As<Napi::Buffer<uint8_t>>();
         const uint8_t* data = chunk.Data();
         size_t size = chunk.Length();
-        size_t offset = 0;
         error_ = 0;
         message_.clear();
         emitFrames_.clear();
-        if (state_ == State::Header && headGot_ > 0) {
-            size_t fill = size < (10 - headGot_) ? size : (10 - headGot_);
-            std::memcpy(headBuf_ + headGot_, data, fill);
-            size_t total = headGot_ + fill;
+
+        size_t offset = 0;
+        if (headGot_ > 0) {
+            size_t pending = headGot_;
+            size_t fill = size < (sizeof(headBuf_) - pending) ? size : (sizeof(headBuf_) - pending);
+            std::memcpy(headBuf_ + pending, data, fill);
+            size_t total = pending + fill;
             size_t consumed = 0;
-            bool ok = Step(headBuf_, total, &consumed);
-            if (frameDone_) {
-                frameDone_ = false;
-                EmitFrame out;
-                out.fin = lastFin_;
-                out.rsv = lastRsv_;
-                out.opcode = lastOpcode_;
-                out.payload.assign(frameBuf_.begin(), frameBuf_.begin() + static_cast<long>(frameLen_));
-                emitFrames_.push_back(std::move(out));
+            bool ok = step(headBuf_, total, &consumed);
+            TakeFrameIfDone();
+            if (!ok) {
+                headGot_ = total;
+                return Finish(env);
             }
-            if (ok && consumed <= total) {
-                offset = consumed;
-                headGot_ = 0;
-            } else if (!ok && consumed == 0) {
-                headGot_ = total < 10 ? total : 10;
-                offset = size;
-            } else {
-                headGot_ = 0;
-                offset = consumed < size ? consumed : size;
-            }
+            headGot_ = 0;
+            size_t ahead = consumed > pending ? (consumed - pending) : 0;
+            data += ahead;
+            size -= ahead;
         }
+
         while (offset < size && error_ == 0) {
             size_t consumed = 0;
             State before = state_;
-            bool ok = Step(data + offset, size - offset, &consumed);
-            if (frameDone_) {
-                frameDone_ = false;
-                EmitFrame out;
-                out.fin = lastFin_;
-                out.rsv = lastRsv_;
-                out.opcode = lastOpcode_;
-                out.payload.assign(frameBuf_.begin(), frameBuf_.begin() + static_cast<long>(frameLen_));
-                emitFrames_.push_back(std::move(out));
-            }
+            bool ok = step(data + offset, size - offset, &consumed);
+            TakeFrameIfDone();
             if (!ok) {
                 if (state_ == State::Header && consumed == 0) {
                     size_t remain = size - offset;
-                    if (remain > 0 && remain < 10) {
+                    if (remain > 0 && remain <= sizeof(headBuf_)) {
                         std::memcpy(headBuf_, data + offset, remain);
                         headGot_ = remain;
-                        offset += remain;
                     }
                 }
                 break;
@@ -80,6 +71,11 @@ public:
                 break;
             }
         }
+        return Finish(env);
+    }
+
+private:
+    Napi::Object Finish(Napi::Env env) {
         Napi::Object result = Napi::Object::New(env);
         Napi::Array frames = Napi::Array::New(env);
         for (const auto& f : emitFrames_) {
@@ -99,178 +95,102 @@ public:
         return result;
     }
 
-private:
-    void Fail(int code, const char* msg) {
-        error_ = code;
-        message_ = msg;
+    void TakeFrameIfDone() {
+        if (!frameDone_) return;
+        frameDone_ = false;
+        EmitFrame out;
+        out.fin = lastFin_;
+        out.rsv = lastRsv_ << 4;
+        out.opcode = lastOpcode_;
+        out.payload.assign(frameBuf_.begin(), frameBuf_.begin() + static_cast<long>(frameLen_));
+        emitFrames_.push_back(std::move(out));
     }
 
-    bool Step(const uint8_t* data, size_t size, size_t* consumed) {
+
+    void flushFrame() {
+        if (!frameDone_) return;
+        frameDone_ = false;
+        EmitFrame f;
+        f.fin = lastFin_; f.rsv = lastRsv_ << 4; f.opcode = lastOpcode_;
+        f.payload.assign(frameBuf_.begin(), frameBuf_.begin() + (long)frameLen_);
+        emitFrames_.push_back(f);
+    }
+    void fail(int code, const char* msg) { error_ = code; message_ = msg; }
+
+    bool step(const uint8_t* d, size_t size, size_t* consumed) {
         if (state_ == State::Payload) {
             size_t need = frameLen_ - got_;
             size_t take = need < size ? need : size;
             if (masked_) {
-                for (size_t i = 0; i < take; ++i) {
-                    frameBuf_[got_ + i] = data[i] ^ mask_[(got_ + i) & 3];
-                }
+                for (size_t i = 0; i < take; ++i) frameBuf_[got_ + i] = d[i] ^ mask_[(got_ + i) & 3];
             } else {
-                std::memcpy(frameBuf_.data() + got_, data, take);
+                memcpy(frameBuf_.data() + got_, d, take);
             }
-            got_ += take;
-            *consumed = take;
-            if (got_ == frameLen_) {
-                frameDone_ = true;
-                state_ = State::Header;
-            }
+            got_ += take; *consumed = take;
+            if (got_ == frameLen_) { frameDone_ = true; state_ = State::Header; }
             return true;
         }
-
         if (state_ == State::Header) {
-            if (size < 2) {
-                *consumed = 0;
-                return false;
-            }
-            uint8_t b0 = data[0];
-            uint8_t b1 = data[1];
-            lastFin_ = (b0 & 0x80) != 0;
-            int rsv = (b0 >> 4) & 0x7;
-            int opcode = b0 & 0x0F;
+            if (size < 2) { *consumed = 0; return false; }
+            uint8_t b0 = d[0], b1 = d[1];
+            bool fin = (b0 & 0x80) != 0;
+            int rsv = (b0 >> 4) & 7;
+            int op = b0 & 0x0F;
             bool masked = (b1 & 0x80) != 0;
             uint64_t len7 = b1 & 0x7F;
-
-            if (opcode >= 0x3 && opcode <= 0x7 || opcode >= 0xB && opcode <= 0xF) {
-                Fail(1002, "Unknown opcode");
-                return false;
-            }
-            bool isControl = opcode >= 0x8;
-            if (isControl) {
-                if (rsv != 0) {
-                    Fail(1002, "Control frame RSV bits must be zero");
-                    return false;
-                }
-                if (!lastFin_) {
-                    Fail(1002, "Fragmented control frame");
-                    return false;
-                }
-                if (len7 >= 126) {
-                    Fail(1002, "Control frame too large");
-                    return false;
-                }
+            if ((op >= 3 && op <= 7) || (op >= 0xB && op <= 0xF)) { fail(1002, "Unknown opcode"); return false; }
+            bool ctrl = op >= 8;
+            if (ctrl) {
+                if (rsv != 0) { fail(1002, "Control frame RSV bits must be zero"); return false; }
+                if (!fin) { fail(1002, "Fragmented control frame"); return false; }
+                if (len7 >= 126) { fail(1002, "Control frame too large"); return false; }
             } else {
-                if (rsv != 0 && (rsv & allowedRsv_) != rsv) {
-                    Fail(1002, "Unexpected RSV bits");
-                    return false;
-                }
+                if (rsv != 0 && ((rsv << 4) & allowedRsv_) != (rsv << 4)) { fail(1002, "Unexpected RSV bits"); return false; }
             }
-            if (isServer_ && !masked) {
-                Fail(1002, "Expected masked frame from client");
-                return false;
-            }
-            if (!isServer_ && masked) {
-                Fail(1002, "Server must not mask frames");
-                return false;
-            }
-
-            lastRsv_ = rsv;
-            lastOpcode_ = opcode;
-            masked_ = masked;
-            if (len7 < 126) {
-                return FinishHeader(data + 2, size - 2, len7, 0, consumed, 2);
-            }
-            if (len7 == 126) {
-                if (isControl) {
-                    Fail(1002, "Control frame too large");
-                    return false;
-                }
-                state_ = State::Extended16;
-                *consumed = 2;
-                return true;
-            }
-            state_ = State::Extended64;
-            *consumed = 2;
-            return true;
-        }
-
-        if (state_ == State::Extended16) {
-            if (size < 2) {
-                *consumed = 0;
-                return false;
-            }
-            uint64_t len = (static_cast<uint64_t>(data[0]) << 8) | data[1];
-            if (len < 126) {
-                Fail(1002, "Non-minimal 16-bit length");
-                return false;
-            }
-            return FinishHeader(data + 2, size - 2, len, 0, consumed, 2);
-        }
-
-        if (state_ == State::Extended64) {
-            if (size < 8) {
-                *consumed = 0;
-                return false;
-            }
+            if (isServer_ && !masked) { fail(1002, "Expected masked frame from client"); return false; }
+            if (!isServer_ && masked) { fail(1002, "Server must not mask frames"); return false; }
+            lastFin_ = fin; lastRsv_ = rsv; lastOpcode_ = op; masked_ = masked;
             uint64_t len = 0;
-            for (int i = 0; i < 8; ++i) {
-                len = (len << 8) | data[i];
-            }
-            if (len & 0x8000000000000000ULL) {
-                Fail(1002, "Payload length top bit set");
-                return false;
-            }
-            if (len < 65536) {
-                Fail(1002, "Non-minimal 64-bit length");
-                return false;
-            }
-            return FinishHeader(data + 8, size - 8, len, 0, consumed, 8);
-        }
-
-        if (state_ == State::Mask) {
-            if (masked_) {
-                if (size < 4) {
-                    *consumed = 0;
-                    return false;
-                }
-                std::memcpy(mask_, data, 4);
-                *consumed = 4;
+            size_t headerBytes = 2;
+            if (len7 < 126) {
+                len = len7;
+            } else if (len7 == 126) {
+                if (size < 4) { *consumed = 0; return false; }
+                len = ((uint64_t)d[2] << 8) | d[3];
+                headerBytes = 4;
+                if (len < 126) { fail(1002, "Non-minimal 16-bit length"); return false; }
             } else {
-                *consumed = 0;
+                if (size < 10) { *consumed = 0; return false; }
+                for (int i = 0; i < 8; ++i) len = (len << 8) | d[2 + i];
+                headerBytes = 10;
+                if (len & 0x8000000000000000ULL) { fail(1002, "Payload length top bit set"); return false; }
+                if (len < 65536) { fail(1002, "Non-minimal 64-bit length"); return false; }
             }
-            if (frameLen_ == 0) {
-                frameDone_ = true;
-                state_ = State::Header;
-                return true;
+            if (len > maxPayload_) { fail(1009, "Payload exceeds configured max"); return false; }
+            frameLen_ = (size_t)len;
+            if (masked) {
+                if (size < headerBytes + 4) { *consumed = 0; return false; }
+                memcpy(mask_, d + headerBytes, 4);
+                headerBytes += 4;
+            } else {
+                memset(mask_, 0, 4);
             }
-            EnsureFrameBuffer(frameLen_);
-            got_ = 0;
-            state_ = State::Payload;
-            return true;
+            *consumed = headerBytes;
+            return enterPayload();
         }
-        *consumed = 0;
-        return false;
+        *consumed = 0; return false;
     }
 
-    bool FinishHeader(const uint8_t* data, size_t size, uint64_t len, int unused,
-                      size_t* consumed, size_t headerConsumed) {
-        (void)unused;
-        if (len > maxPayload_) {
-            Fail(1009, "Payload exceeds configured max");
-            return false;
-        }
-        frameLen_ = static_cast<size_t>(len);
-        state_ = State::Mask;
-        *consumed = headerConsumed;
-        (void)data;
-        (void)size;
+
+    bool enterPayload() {
+        if (frameLen_ > maxPayload_) { fail(1009, "Payload exceeds configured max"); return false; }
+        if (frameLen_ == 0) { frameDone_ = true; state_ = State::Header; return true; }
+        if (frameBuf_.size() < frameLen_) frameBuf_.resize(frameLen_);
+        got_ = 0;
+        state_ = State::Payload;
         return true;
     }
-
-    void EnsureFrameBuffer(size_t len) {
-        if (frameBuf_.size() < len) {
-            frameBuf_.resize(len);
-        }
-    }
-
-    enum class State { Header, Extended16, Extended64, Mask, Payload };
+enum class State { Header, Payload };
     uint8_t headBuf_[10] = { 0 };
     size_t headGot_ = 0;
     bool isServer_;
@@ -282,12 +202,6 @@ private:
     size_t frameLen_ = 0;
     size_t got_ = 0;
     bool frameDone_ = false;
-    struct EmitFrame {
-        bool fin;
-        int rsv;
-        int opcode;
-        std::vector<uint8_t> payload;
-    };
     std::vector<EmitFrame> emitFrames_;
     bool lastFin_ = false;
     int lastRsv_ = 0;
