@@ -34,7 +34,9 @@ jobs:
           cd websocket-addon
           npm install --ignore-scripts
           npx node-gyp configure build
-          ls -la build/Release/
+      - name: list output
+        shell: bash
+        run: ls -la websocket-addon/build/Release/ || true
       - name: stage artifact
         shell: bash
         run: |
@@ -89,7 +91,9 @@ jobs:
           cd linux-injector
           npm install --ignore-scripts
           npx node-gyp configure build
-          ls -la build/Release/
+      - name: list output
+        shell: bash
+        run: ls -la linux-injector/build/Release/ || true
       - name: stage artifact
         run: |
           mkdir -p out
