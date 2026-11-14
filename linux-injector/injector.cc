@@ -1,12 +1,15 @@
 #include <napi.h>
 
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <functional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "core.h"
-
 namespace {
 
 using namespace nexuslab_linux;
