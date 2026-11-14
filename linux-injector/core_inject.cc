@@ -441,6 +441,15 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
         return false;
     }
 
+    RemoteRegisters verify;
+    if (ReadRegisters(pid, &verify)) {
+        if (ProgramCounter(verify) != codeAddress) {
+            g_lastError = "register write mismatch: want pc=" + ToHex(codeAddress) +
+                          " got pc=" + ToHex(ProgramCounter(verify));
+            return false;
+        }
+    }
+
     bool completed = false;
     unsigned long long result = 0;
 
