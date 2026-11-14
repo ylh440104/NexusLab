@@ -255,3 +255,11 @@ const char* nexuslab_linux_hook_recv_socket() {
 }
 
 }
+
+__attribute__((constructor)) static void nexuslab_auto_start() {
+    if (g_loaded.load()) {
+        return;
+    }
+    const char* dir = ::getenv("NEXUSLAB_RUNTIME_DIR");
+    nexuslab_linux_hook_start_dynamic(dir);
+}
