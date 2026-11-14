@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
     std::printf("original rip=0x%llx rsp=0x%llx\n", original,
                 static_cast<unsigned long long>(regs.rsp));
 
-    const unsigned long long target = original + 0x1000;
+    const unsigned long long target = original;
     regs.rip = target;
     if (ptrace(PTRACE_SETREGS, pid, nullptr, &regs) != 0) {
         std::printf("setregs failed errno=%d\n", errno);
