@@ -165,8 +165,8 @@ Napi::Value LoadModule(const Napi::CallbackInfo& info) {
         return RejectedPromise(env, "a library path is required");
     }
 
-    auto handle = std::make_shared<unsigned long>(0);
-    auto base = std::make_shared<unsigned long>(0);
+    auto handle = std::make_shared<unsigned long long>(0);
+    auto base = std::make_shared<unsigned long long>(0);
     auto injected = std::make_shared<bool>(false);
 
     auto* task = new PromiseTask(
@@ -196,8 +196,8 @@ Napi::Value UnloadModule(const Napi::CallbackInfo& info) {
         return RejectedPromise(env, "pid and library path are required");
     }
 
-    auto handle = std::make_shared<unsigned long>(0);
-    auto base = std::make_shared<unsigned long>(0);
+    auto handle = std::make_shared<unsigned long long>(0);
+    auto base = std::make_shared<unsigned long long>(0);
     auto injected = std::make_shared<bool>(false);
 
     auto* task = new PromiseTask(
@@ -229,13 +229,13 @@ Napi::Value CallSymbol(const Napi::CallbackInfo& info) {
         return RejectedPromise(env, "a symbol name is required");
     }
 
-    auto value = std::make_shared<unsigned long>(0);
+    auto value = std::make_shared<unsigned long long>(0);
     auto called = std::make_shared<bool>(false);
 
     auto* task = new PromiseTask(
         env,
         [value, called, pid, symbol]() {
-            const unsigned long address = ResolveRemoteSymbol(pid, symbol.c_str());
+            const unsigned long long address = ResolveRemoteSymbol(pid, symbol.c_str());
             if (address == 0) {
                 g_lastError = "cannot resolve symbol inside target";
                 return;
@@ -250,7 +250,7 @@ Napi::Value CallSymbol(const Napi::CallbackInfo& info) {
                 g_lastError = "target did not stop";
                 return;
             }
-            *called = CallRemoteFunction(pid, address, std::vector<unsigned long>(), value.get());
+            *called = CallRemoteFunction(pid, address, std::vector<unsigned long long>(), value.get());
             ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
         },
         [value, called](Napi::Env scope) -> Napi::Value {
