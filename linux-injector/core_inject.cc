@@ -136,8 +136,9 @@ void UndoBreakpoint(pid_t pid, unsigned long long returnAddress, unsigned char o
 
 std::string g_lastError;
 
-bool CallRemoteFunction(pid_t pid, unsigned long address, const std::vector<unsigned long>& args,
-                        unsigned long* outReturn) {
+bool CallRemoteFunction(pid_t pid, unsigned long long address,
+                        const std::vector<unsigned long long>& args,
+                        unsigned long long* outReturn) {
     RemoteRegisters saved;
     if (!ReadRegisters(pid, &saved)) {
         g_lastError = "cannot read target registers";
@@ -264,14 +265,14 @@ bool CallRemoteFunction(pid_t pid, unsigned long address, const std::vector<unsi
     return true;
 }
 
-bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long* outHandle,
-                   unsigned long* outBase) {
-    const unsigned long dlopenAddress = ResolveRemoteSymbol(pid, "dlopen");
+bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long long* outHandle,
+                   unsigned long long* outBase) {
+    const unsigned long long dlopenAddress = ResolveRemoteSymbol(pid, "dlopen");
     if (dlopenAddress == 0) {
         g_lastError = "cannot resolve dlopen inside target";
         return false;
     }
-    const unsigned long dlerrorAddress = ResolveRemoteSymbol(pid, "dlerror");
+    const unsigned long long dlerrorAddress = ResolveRemoteSymbol(pid, "dlerror");
 
     if (ptrace(PTRACE_ATTACH, pid, nullptr, nullptr) != 0) {
         g_lastError = "ptrace attach rejected (need matching uid or CAP_SYS_PTRACE)";
@@ -316,8 +317,8 @@ bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long* out
         return false;
     }
 
-    unsigned long handle = 0;
-    const std::vector<unsigned long> callArguments = {pathSlot, RTLD_NOW};
+    unsigned long long handle = 0;
+    const std::vector<unsigned long long> callArguments = {pathSlot, RTLD_NOW};
     const bool called = CallRemoteFunction(pid, dlopenAddress, callArguments, &handle);
 
     if (!called) {
@@ -329,8 +330,8 @@ bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long* out
     if (handle == 0) {
         std::string message = "dlopen returned null inside target";
         if (dlerrorAddress != 0) {
-            unsigned long errorPointer = 0;
-            const std::vector<unsigned long> noArguments;
+            unsigned long long errorPointer = 0;
+            const std::vector<unsigned long long> noArguments;
             if (CallRemoteFunction(pid, dlerrorAddress, noArguments, &errorPointer) &&
                 errorPointer != 0) {
                 char buffer[512] = {0};

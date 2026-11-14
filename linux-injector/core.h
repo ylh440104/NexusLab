@@ -26,19 +26,20 @@ std::vector<pid_t> FindMainProcesses();
 
 std::vector<FileHolder> QueryFileHolders(const std::string& targetPath);
 
-bool ReadProcessMemory(pid_t pid, unsigned long address, void* buffer, size_t length);
+bool ReadProcessMemory(pid_t pid, unsigned long long address, void* buffer, size_t length);
 
-bool WriteProcessMemory(pid_t pid, unsigned long address, const void* buffer, size_t length);
+bool WriteProcessMemory(pid_t pid, unsigned long long address, const void* buffer, size_t length);
 
-unsigned long FindModuleBase(pid_t pid, const char* soname);
+unsigned long long FindModuleBase(pid_t pid, const char* soname);
 
-unsigned long ResolveRemoteSymbol(pid_t pid, const char* symbol);
+unsigned long long ResolveRemoteSymbol(pid_t pid, const char* symbol);
 
-bool CallRemoteFunction(pid_t pid, unsigned long address, const std::vector<unsigned long>& args,
-                        unsigned long* outReturn);
+bool CallRemoteFunction(pid_t pid, unsigned long long address,
+                        const std::vector<unsigned long long>& args,
+                        unsigned long long* outReturn);
 
-bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long* outHandle,
-                   unsigned long* outBase);
+bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long long* outHandle,
+                   unsigned long long* outBase);
 
 }
 

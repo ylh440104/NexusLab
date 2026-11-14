@@ -25,8 +25,11 @@ jobs:
 
       - name: Build injector
         run: |
-          sh linux-injector/test/gen_cli.sh
-          g++ -std=c++17 -O2 -o /tmp/injector linux-injector/test/inject_cli.cc -ldl -lpthread
+          g++ -std=c++17 -O2 -Ilinux-injector -o /tmp/injector \
+            linux-injector/tools/inject_cli.cc \
+            linux-injector/core_proc.cc \
+            linux-injector/core_inject.cc \
+            -ldl -lpthread
           ls -la /tmp/injector
 
       - name: Verify ctor

@@ -183,7 +183,7 @@ std::vector<FileHolder> QueryFileHolders(const std::string& targetPath) {
     return holders;
 }
 
-bool ReadProcessMemory(pid_t pid, unsigned long address, void* buffer, size_t length) {
+bool ReadProcessMemory(pid_t pid, unsigned long long address, void* buffer, size_t length) {
     char path[64];
     std::snprintf(path, sizeof(path), "/proc/%d/mem", static_cast<int>(pid));
     int fd = open(path, O_RDONLY);
@@ -195,7 +195,7 @@ bool ReadProcessMemory(pid_t pid, unsigned long address, void* buffer, size_t le
     return readBytes == static_cast<ssize_t>(length);
 }
 
-bool WriteProcessMemory(pid_t pid, unsigned long address, const void* buffer, size_t length) {
+bool WriteProcessMemory(pid_t pid, unsigned long long address, const void* buffer, size_t length) {
     char path[64];
     std::snprintf(path, sizeof(path), "/proc/%d/mem", static_cast<int>(pid));
     int fd = open(path, O_RDWR);
@@ -207,7 +207,7 @@ bool WriteProcessMemory(pid_t pid, unsigned long address, const void* buffer, si
     return written == static_cast<ssize_t>(length);
 }
 
-unsigned long FindModuleBase(pid_t pid, const char* soname) {
+unsigned long long FindModuleBase(pid_t pid, const char* soname) {
     char path[64];
     std::snprintf(path, sizeof(path), "/proc/%d/maps", static_cast<int>(pid));
     FILE* fp = std::fopen(path, "r");
@@ -215,7 +215,7 @@ unsigned long FindModuleBase(pid_t pid, const char* soname) {
         return 0;
     }
     char line[1024];
-    unsigned long lowest = 0;
+    unsigned long long lowest = 0;
     while (std::fgets(line, sizeof(line), fp) != nullptr) {
         if (std::strstr(line, soname) == nullptr) {
             continue;
@@ -225,7 +225,7 @@ unsigned long FindModuleBase(pid_t pid, const char* soname) {
         if (!readable) {
             continue;
         }
-        unsigned long start = std::strtoul(line, nullptr, 16);
+        unsigned long long start = std::strtoull(line, nullptr, 16);
         if (start == 0) {
             continue;
         }
@@ -237,7 +237,7 @@ unsigned long FindModuleBase(pid_t pid, const char* soname) {
     return lowest;
 }
 
-unsigned long ResolveRemoteSymbol(pid_t pid, const char* symbol) {
+unsigned long long ResolveRemoteSymbol(pid_t pid, const char* symbol) {
     void* localAddress = dlsym(RTLD_DEFAULT, symbol);
     if (localAddress == nullptr) {
         return 0;
@@ -246,10 +246,10 @@ unsigned long ResolveRemoteSymbol(pid_t pid, const char* symbol) {
     if (dladdr(localAddress, &info) == 0 || info.dli_fbase == nullptr || info.dli_fname == nullptr) {
         return 0;
     }
-    unsigned long localBase = reinterpret_cast<unsigned long>(info.dli_fbase);
-    unsigned long offset = reinterpret_cast<unsigned long>(localAddress) - localBase;
+    unsigned long long localBase = reinterpret_cast<unsigned long long>(info.dli_fbase);
+    unsigned long long offset = reinterpret_cast<unsigned long long>(localAddress) - localBase;
 
-    unsigned long remoteBase = FindModuleBase(pid, info.dli_fname);
+    unsigned long long remoteBase = FindModuleBase(pid, info.dli_fname);
     if (remoteBase == 0) {
         const char* slash = std::strrchr(info.dli_fname, '/');
         if (slash != nullptr) {
