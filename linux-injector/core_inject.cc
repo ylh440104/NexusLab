@@ -454,6 +454,9 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
     ProgramCounter(working) = codeAddress;
     StackPointer(working) = stackTop - 16;
     IndirectTarget(working) = address;
+#if !defined(__aarch64__)
+    working.native.orig_rax = static_cast<unsigned long long>(-1);
+#endif
 #if defined(__aarch64__)
     LinkRegister(working) = codeAddress;
 #endif
