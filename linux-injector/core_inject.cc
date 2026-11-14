@@ -477,7 +477,18 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
     }
 
     ProgramCounter(working) = codeAddress;
+#if defined(__aarch64__)
     StackPointer(working) = stackTop - 16;
+#else
+    /*
+     * On x86_64 the kernel has to build a signal frame on the stack before it
+     * can hand the int3 breakpoint to ptrace. A freshly mapped anonymous page
+     * is not registered as a stack, so the frame construction fails and the
+     * breakpoint surfaces as SIGSEGV instead of SIGTRAP. Reusing the thread's
+     * own stack keeps the frame valid.
+     */
+    StackPointer(working) = (StackPointer(saved) & ~0xFULL) - 0x80;
+#endif
     IndirectTarget(working) = address;
 #if !defined(__aarch64__)
     working.native.orig_rax = static_cast<unsigned long long>(-1);
