@@ -137,7 +137,7 @@ jobs:
         run: |
           cd linux-injector
           npm install --ignore-scripts --no-audit --no-fund
-          npx node-gyp reconfigure || npx node-gyp configure
+          npx node-gyp configure
           npx node-gyp build
           cp build/Release/linux_injector.node \
             ../packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.node
