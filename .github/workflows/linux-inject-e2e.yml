@@ -25,6 +25,7 @@ jobs:
 
       - name: Build injector
         run: |
+          sh linux-injector/test/gen_cli.sh
           g++ -std=c++17 -O2 -o /tmp/injector linux-injector/test/inject_cli.cc -ldl -lpthread
           ls -la /tmp/injector
 

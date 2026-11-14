@@ -310,42 +310,78 @@ bool RemoteCall(pid_t pid, unsigned long fnAddress, const std::vector<unsigned l
     unsigned long retAddr = REMOTE_PC(regs);
     unsigned long sp = REMOTE_SP(regs) - 16;
     sp &= ~0xFUL;
-    if (!WriteMemory(pid, sp, &retAddr, sizeof(retAddr))) {
+    unsigned long trampoline = 0;
+    if (!WriteMemory(pid, sp, &trampoline, sizeof(trampoline))) {
         g_error = "cannot write return address to target stack";
         return false;
     }
-
+    unsigned char originalByte = 0;
+    if (!ReadMemory(pid, retAddr, &originalByte, 1)) {
+        g_error = "cannot read original byte at return address";
+        return false;
+    }
+    unsigned char trap = 0xCC;
+    if (!WriteMemory(pid, retAddr, &trap, 1)) {
+        g_error = "cannot place breakpoint in target";
+        return false;
+    }
     for (size_t i = 0; i < args.size() && i < 6; ++i) {
         REMOTE_ARG(regs, i) = args[i];
     }
     REMOTE_PC(regs) = fnAddress;
     REMOTE_SP(regs) = sp;
-
     if (!SetRegs(pid, &regs)) {
+        WriteMemory(pid, retAddr, &originalByte, 1);
         g_error = "cannot set target registers";
         return false;
     }
-
-    if (ptrace(PTRACE_CONT, pid, nullptr, nullptr) != 0) {
-        g_error = "cannot resume target";
+    bool trapped = false;
+    for (int guard = 0; guard < 4096 && !trapped; ++guard) {
+        if (ptrace(PTRACE_CONT, pid, nullptr, nullptr) != 0) {
+            WriteMemory(pid, retAddr, &originalByte, 1);
+            g_error = "cannot resume target";
+            return false;
+        }
+        int status = 0;
+        if (!WaitForStop(pid, &status)) {
+            WriteMemory(pid, retAddr, &originalByte, 1);
+            g_error = "target died during remote call";
+            return false;
+        }
+        RemoteRegs probe;
+        if (!GetRegs(pid, &probe)) {
+            WriteMemory(pid, retAddr, &originalByte, 1);
+            g_error = "cannot read registers after stop";
+            return false;
+        }
+        if (REMOTE_PC(probe) == retAddr || REMOTE_PC(probe) == retAddr + 1) {
+            trapped = true;
+            break;
+        }
+        int sig = WIFSTOPPED(status) ? WSTOPSIG(status) : 0;
+        if (sig == SIGTRAP || sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig == SIGFPE) {
+            WriteMemory(pid, retAddr, &originalByte, 1);
+            g_error = "fatal signal during remote call";
+            return false;
+        }
+        if (sig != 0) ptrace(PTRACE_CONT, pid, nullptr, sig);
+    }
+    if (!trapped) {
+        WriteMemory(pid, retAddr, &originalByte, 1);
+        g_error = "breakpoint never hit during remote call";
         return false;
     }
-
-    int status = 0;
-    if (!WaitForStop(pid, &status)) {
-        g_error = "target died during remote call";
-        return false;
-    }
-
     RemoteRegs after;
     if (GetRegs(pid, &after)) {
-        if (outRet != nullptr) {
-            *outRet = REMOTE_RET(after);
+        if (outRet != nullptr) *outRet = REMOTE_RET(after);
+        if (REMOTE_PC(after) == retAddr + 1) {
+            REMOTE_PC(after) = retAddr;
+            SetRegs(pid, &after);
         }
     }
+    WriteMemory(pid, retAddr, &originalByte, 1);
     return true;
 }
-
 bool InjectLibrary(pid_t pid, const std::string& path, unsigned long* outHandle,
                    unsigned long* outBase) {
     unsigned long dlopenAddr = ResolveRemoteSymbol(pid, "dlopen");
@@ -430,6 +466,7 @@ bool InjectLibrary(pid_t pid, const std::string& path, unsigned long* outHandle,
 }
 
 }
+
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -441,23 +478,9 @@ int main(int argc, char** argv) {
     pid_t pid = static_cast<pid_t>(std::atoi(argv[1]));
     std::string path = argv[2];
     std::printf("target pid=%d so=%s\n", static_cast<int>(pid), path.c_str());
-    unsigned long dl = ResolveRemoteSymbol(pid, "dlopen");
-    unsigned long lc = FindModuleBase(pid, "libc.so.6");
-    void* loc = dlsym(RTLD_DEFAULT, "dlopen");
-    Dl_info di; dladdr(loc, &di);
-    std::printf("local dlopen=%p fname=%s fbase=%p\n", loc, di.dli_fname ? di.dli_fname : "?", di.dli_fbase);
-    std::printf("remote libc base=0x%lx remote dlopen=0x%lx\n", lc, dl);
     unsigned long base = 0;
     bool ok = InjectLibrary(pid, path, nullptr, &base);
     std::printf("inject ok=%d err=%s\n", ok ? 1 : 0, g_error.c_str());
-    {
-        FILE* f = std::fopen("/proc/self/status", "r");
-        if (f) std::fclose(f);
-        char cmd[256];
-        std::snprintf(cmd, sizeof(cmd), "grep -c '%s' /proc/%d/maps 2>/dev/null", path.c_str(), (int)pid);
-        std::printf("maps_check: "); std::fflush(stdout);
-        std::system(cmd);
-    }
     if (ok) std::printf("module base=0x%lx\n", base);
     return ok ? 0 : 1;
 }
