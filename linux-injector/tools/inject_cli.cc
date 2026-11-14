@@ -87,7 +87,7 @@ int RunInjection(pid_t pid, const char* libraryPath) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::printf("usage: %s <pid> <so-path> [--symbol NAME]\n", argv[0]);
+        std::printf("usage: %s <pid> <so-path> [--symbol NAME | --call NAME]\n", argv[0]);
         return 2;
     }
     const pid_t pid = static_cast<pid_t>(std::atoi(argv[1]));
@@ -96,11 +96,14 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    if (argc >= 5 && std::strcmp(argv[3], "--symbol") == 0) {
-        return RunSymbolProbe(pid, argv[4]);
-    if (argc >= 5 && std::strcmp(argv[3], "--call") == 0) {
-        return RunSymbolOnly(pid, argv[4]);
+    if (argc >= 5) {
+        if (std::strcmp(argv[3], "--symbol") == 0) {
+            return RunSymbolProbe(pid, argv[4]);
+        }
+        if (std::strcmp(argv[3], "--call") == 0) {
+            return RunSymbolOnly(pid, argv[4]);
+        }
     }
-    }
+
     return RunInjection(pid, argv[2]);
 }
