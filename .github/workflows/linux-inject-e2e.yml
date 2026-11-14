@@ -79,7 +79,8 @@ jobs:
           echo '=== maps ==='
           grep nexuslab /proc/$MAIN/maps || echo 'NO_MAPS'
           echo '=== sockets ==='
-          ls -la /tmp/nexuslab/ 2>/dev/null || echo 'NO_RUNTIME_DIR'
+          ls -la /run/user/*/nexuslab/ 2>/dev/null || echo 'NO_RUNTIME_DIR'
+          ls -la /tmp/nexuslab/ 2>/dev/null || true
           ls /proc/$MAIN/maps >/dev/null 2>&1 && echo ALIVE || echo DEAD
 
       - name: Logs

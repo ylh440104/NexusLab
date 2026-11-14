@@ -441,9 +441,23 @@ int main(int argc, char** argv) {
     pid_t pid = static_cast<pid_t>(std::atoi(argv[1]));
     std::string path = argv[2];
     std::printf("target pid=%d so=%s\n", static_cast<int>(pid), path.c_str());
+    unsigned long dl = ResolveRemoteSymbol(pid, "dlopen");
+    unsigned long lc = FindModuleBase(pid, "libc.so.6");
+    void* loc = dlsym(RTLD_DEFAULT, "dlopen");
+    Dl_info di; dladdr(loc, &di);
+    std::printf("local dlopen=%p fname=%s fbase=%p\n", loc, di.dli_fname ? di.dli_fname : "?", di.dli_fbase);
+    std::printf("remote libc base=0x%lx remote dlopen=0x%lx\n", lc, dl);
     unsigned long base = 0;
     bool ok = InjectLibrary(pid, path, nullptr, &base);
     std::printf("inject ok=%d err=%s\n", ok ? 1 : 0, g_error.c_str());
+    {
+        FILE* f = std::fopen("/proc/self/status", "r");
+        if (f) std::fclose(f);
+        char cmd[256];
+        std::snprintf(cmd, sizeof(cmd), "grep -c '%s' /proc/%d/maps 2>/dev/null", path.c_str(), (int)pid);
+        std::printf("maps_check: "); std::fflush(stdout);
+        std::system(cmd);
+    }
     if (ok) std::printf("module base=0x%lx\n", base);
     return ok ? 0 : 1;
 }
