@@ -86,6 +86,8 @@ jobs:
           grep -c nexuslab /proc/$MAIN/maps || echo 'before=0'
           echo '=== register write fidelity ==='
           /tmp/probe_regs $MAIN 2>&1 | head -10 || true
+          echo '=== remote call getpid (validates trampoline) ==='
+          /tmp/injector $MAIN /tmp/nexuslab-hook.so --call getpid 2>&1 | head -10 || true
           echo '=== real injection (clean state) ==='
           /tmp/injector $MAIN /tmp/nexuslab-hook.so 2>&1 | head -30 || true
           echo '=== modules after injection ==='
