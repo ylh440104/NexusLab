@@ -321,7 +321,7 @@ bool MakeWritable(pid_t pid, unsigned long long address, unsigned long long leng
     const std::vector<unsigned long long> arguments = {
         pageStart,
         pageEnd - pageStart,
-        3,
+        7,
     };
     unsigned long long result = 0;
     if (!CallRemoteSyscall(pid, kMprotectSyscall, arguments, &result)) {
