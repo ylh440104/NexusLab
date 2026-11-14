@@ -250,20 +250,20 @@ bool WaitForStop(pid_t pid, int* outStatus) {
 struct RemoteRegs {
     unsigned long regs[34];
 };
-#define REMOTE_PC(regs) ((regs).regs[32])
-#define REMOTE_SP(regs) ((regs).regs[31])
-#define REMOTE_SYSNR(regs) ((regs).regs[8])
-#define REMOTE_ARG(regs, i) ((regs).regs[i])
-#define REMOTE_RET(regs) ((regs).regs[0])
+#define REMOTE_PC(rs) ((rs).regs[32])
+#define REMOTE_SP(rs) ((rs).regs[31])
+#define REMOTE_SYSNR(rs) ((rs).regs[8])
+#define REMOTE_ARG(rs, i) ((rs).regs[i])
+#define REMOTE_RET(rs) ((rs).regs[0])
 #else
 struct RemoteRegs {
     struct user_regs_struct u;
 };
-#define REMOTE_PC(regs) ((regs).u.rip)
-#define REMOTE_SP(regs) ((regs).u.rsp)
-#define REMOTE_SYSNR(regs) ((regs).u.orig_rax)
-#define REMOTE_ARG(regs, i) ((i) == 0 ? (regs).u.rdi : (i) == 1 ? (regs).u.rsi : (i) == 2 ? (regs).u.rdx : (i) == 3 ? (regs).u.r10 : (i) == 4 ? (regs).u.r8 : (regs).u.r9)
-#define REMOTE_RET(regs) ((regs).u.rax)
+#define REMOTE_PC(rs) ((rs).u.rip)
+#define REMOTE_SP(rs) ((rs).u.rsp)
+#define REMOTE_SYSNR(rs) ((rs).u.orig_rax)
+#define REMOTE_ARG(rs, i) ((i) == 0 ? (rs).u.rdi : (i) == 1 ? (rs).u.rsi : (i) == 2 ? (rs).u.rdx : (i) == 3 ? (rs).u.r10 : (i) == 4 ? (rs).u.r8 : (rs).u.r9)
+#define REMOTE_RET(rs) ((rs).u.rax)
 #endif
 
 bool GetRegs(pid_t pid, RemoteRegs* out) {
