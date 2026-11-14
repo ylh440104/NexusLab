@@ -259,6 +259,8 @@ constexpr unsigned long long kRemoteStackSize = 2ULL * 1024 * 1024;
 unsigned long long g_codeSlot = 0;
 unsigned long long g_stackTop = 0;
 pid_t g_reservedPid = 0;
+unsigned char g_slotBackup[8] = {0};
+bool g_slotBackupValid = false;
 
 std::string ToHex(unsigned long long value) {
     char buffer[32];
@@ -355,6 +357,7 @@ unsigned long long EnsureCodeSlot(pid_t pid) {
         g_codeSlot = 0;
         g_stackTop = 0;
         g_reservedPid = pid;
+        g_slotBackupValid = false;
     }
     if (g_codeSlot != 0) {
         return g_codeSlot;
@@ -372,7 +375,9 @@ unsigned long long EnsureCodeSlot(pid_t pid) {
     const unsigned long long libcBase = FindModuleBase(pid, "libc.so.6");
     if (libcBase != 0) {
         const unsigned long long entry = libcBase + EntryPointOf(pid, libcBase);
-        if (entry != 0 && MakeWritable(pid, entry, 0x40)) {
+        if (entry != 0 && MakeWritable(pid, entry, 0x40) &&
+            ReadProcessMemory(pid, entry, g_slotBackup, sizeof(g_slotBackup))) {
+            g_slotBackupValid = true;
             g_codeSlot = entry;
             return g_codeSlot;
         }
@@ -420,6 +425,13 @@ unsigned long long EnsureRemoteStack(pid_t pid) {
 
 }
 
+void RestoreCodeSlot(pid_t pid, unsigned long long codeAddress) {
+    if (g_slotBackupValid && g_reservedPid == pid) {
+        WriteProcessMemory(pid, codeAddress, g_slotBackup, sizeof(g_slotBackup));
+        g_slotBackupValid = false;
+    }
+}
+
 bool CallRemoteFunction(pid_t pid, unsigned long long address,
                         const std::vector<unsigned long long>& args,
                         unsigned long long* outReturn) {
@@ -427,17 +439,14 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
         g_lastError = "remote call target address is zero";
         return false;
     }
-
     const unsigned long long codeAddress = EnsureCodeSlot(pid);
     if (codeAddress == 0) {
         return false;
     }
-
     const unsigned long long stackTop = EnsureRemoteStack(pid);
     if (stackTop == 0) {
         return false;
     }
-
     RemoteRegisters saved;
     if (!ReadRegisters(pid, &saved)) {
         g_lastError = "cannot read target registers before remote call";
@@ -446,22 +455,16 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
 
 #if defined(__aarch64__)
     const unsigned int trampoline[2] = {0xD63F00C0U, kBreakInstruction};
+    constexpr size_t trampolineSize = sizeof(trampoline);
+    constexpr unsigned long long trapPcOffset = 4;
 #else
     const unsigned char trampoline[3] = {0xFF, 0xD3, 0xCC};
+    constexpr size_t trampolineSize = sizeof(trampoline);
+    constexpr unsigned long long trapPcOffset = 3;
 #endif
 
-    if (!WriteProcessMemory(pid, codeAddress, trampoline, sizeof(trampoline))) {
+    if (!WriteProcessMemory(pid, codeAddress, trampoline, trampolineSize)) {
         g_lastError = "cannot install trampoline into target";
-        return false;
-    }
-
-    unsigned char verifyBytes[8] = {0};
-    if (!ReadProcessMemory(pid, codeAddress, verifyBytes, sizeof(trampoline))) {
-        g_lastError = "cannot read back trampoline at " + ToHex(codeAddress);
-        return false;
-    }
-    if (std::memcmp(verifyBytes, trampoline, sizeof(trampoline)) != 0) {
-        g_lastError = "trampoline read-back mismatch at " + ToHex(codeAddress);
         return false;
     }
 
@@ -469,46 +472,19 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
     for (size_t index = 0; index < args.size() && index < kMaxArguments; ++index) {
         ArgumentRegister(working, index) = args[index];
     }
-
-    unsigned char stackProbe[8] = {0};
-    if (!WriteProcessMemory(pid, stackTop - 64, stackProbe, sizeof(stackProbe))) {
-        g_lastError = "scratch stack is not writable at " + ToHex(stackTop);
-        return false;
-    }
-
     ProgramCounter(working) = codeAddress;
 #if defined(__aarch64__)
     StackPointer(working) = stackTop - 16;
+    LinkRegister(working) = codeAddress;
 #else
-    /*
-     * On x86_64 the kernel has to build a signal frame on the stack before it
-     * can hand the int3 breakpoint to ptrace. A freshly mapped anonymous page
-     * is not registered as a stack, so the frame construction fails and the
-     * breakpoint surfaces as SIGSEGV instead of SIGTRAP. Reusing the thread's
-     * own stack keeps the frame valid.
-     */
     StackPointer(working) = (StackPointer(saved) & ~0xFULL) - 0x80;
-#endif
-    IndirectTarget(working) = address;
-#if !defined(__aarch64__)
     working.native.orig_rax = static_cast<unsigned long long>(-1);
 #endif
-#if defined(__aarch64__)
-    LinkRegister(working) = codeAddress;
-#endif
+    IndirectTarget(working) = address;
 
     if (!WriteRegisters(pid, working)) {
         g_lastError = "cannot apply registers for remote call";
         return false;
-    }
-
-    RemoteRegisters verify;
-    if (ReadRegisters(pid, &verify)) {
-        if (ProgramCounter(verify) != codeAddress) {
-            g_lastError = "register write mismatch: want pc=" + ToHex(codeAddress) +
-                          " got pc=" + ToHex(ProgramCounter(verify));
-            return false;
-        }
     }
 
     bool completed = false;
@@ -539,11 +515,10 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
                     faultPc = ProgramCounter(faultRegs);
                 }
                 WriteRegisters(pid, saved);
+                RestoreCodeSlot(pid, codeAddress);
                 g_lastError = "target faulted during remote call: signal=" +
                               std::to_string(signal) + " pc=" + ToHex(faultPc) +
-                              " address=" + ToHex(address) +
-                              " codeSlot=" + ToHex(codeAddress) +
-                              " stackTop=" + ToHex(stackTop);
+                              " address=" + ToHex(address);
                 return false;
             }
             continue;
@@ -556,7 +531,11 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
         }
 
         const unsigned long long currentPc = ProgramCounter(probe);
-        if (currentPc == codeAddress || currentPc == codeAddress + 4) {
+#if defined(__aarch64__)
+        if (currentPc == codeAddress + trapPcOffset || currentPc == codeAddress) {
+#else
+        if (currentPc == codeAddress + trapPcOffset) {
+#endif
             result = ReturnValue(probe);
             completed = true;
             break;
@@ -564,6 +543,7 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
     }
 
     WriteRegisters(pid, saved);
+    RestoreCodeSlot(pid, codeAddress);
 
     if (!completed) {
         g_lastError = "remote call did not return to the trampoline";
@@ -575,7 +555,6 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
     }
     return true;
 }
-
 
 bool CallRemoteSyscall(pid_t pid, unsigned long long syscallNumber,
                        const std::vector<unsigned long long>& args,
