@@ -451,6 +451,12 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
         ArgumentRegister(working, index) = args[index];
     }
 
+    unsigned char stackProbe[8] = {0};
+    if (!WriteProcessMemory(pid, stackTop - 64, stackProbe, sizeof(stackProbe))) {
+        g_lastError = "scratch stack is not writable at " + ToHex(stackTop);
+        return false;
+    }
+
     ProgramCounter(working) = codeAddress;
     StackPointer(working) = stackTop - 16;
     IndirectTarget(working) = address;
