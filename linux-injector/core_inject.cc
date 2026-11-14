@@ -365,6 +365,18 @@ unsigned long long EnsureCodeSlot(pid_t pid) {
         return 0;
     }
 
+    unsigned long long protResult = 0;
+#if defined(__aarch64__)
+    constexpr unsigned long long kMprotectNr = 226;
+#else
+    constexpr unsigned long long kMprotectNr = 10;
+#endif
+    const std::vector<unsigned long long> protArgs = {slot, 0x1000, 7};
+    if (CallRemoteSyscall(pid, kMprotectNr, protArgs, &protResult) && protResult != 0) {
+        g_lastError = "mprotect(rwx) failed for code slot " + ToHex(slot);
+        return 0;
+    }
+
     g_codeSlot = slot;
     return g_codeSlot;
 }
@@ -416,7 +428,7 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
 #if defined(__aarch64__)
     const unsigned int trampoline[2] = {0xD63F00C0U, kBreakInstruction};
 #else
-    const unsigned char trampoline[5] = {0x90, 0x90, 0xFF, 0xD3, 0xCC};
+    const unsigned char trampoline[3] = {0xFF, 0xD3, 0xCC};
 #endif
 
     if (!WriteProcessMemory(pid, codeAddress, trampoline, sizeof(trampoline))) {
@@ -439,11 +451,7 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
         ArgumentRegister(working, index) = args[index];
     }
 
-#if defined(__aarch64__)
     ProgramCounter(working) = codeAddress;
-#else
-    ProgramCounter(working) = codeAddress + 2;
-#endif
     StackPointer(working) = stackTop - 16;
     IndirectTarget(working) = address;
 #if defined(__aarch64__)
