@@ -100,6 +100,9 @@ int MakeListener(const char* path) {
     std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
     ::unlink(path);
     if (::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+        if (getenv("NEXUSLAB_HOOK_DEBUG") != nullptr) {
+            std::fprintf(stderr, "[hook] bind failed path=%s errno=%d\n", path, errno);
+        }
         ::close(fd);
         return -1;
     }
@@ -228,6 +231,7 @@ int nexuslab_linux_hook_start_dynamic(const char* runtimeDir) {
     std::string dir = (runtimeDir && *runtimeDir) ? std::string(runtimeDir) : RuntimeDir();
     std::string cp = dir + "/mojo." + std::to_string(::getpid()) + ".control.sock";
     std::string rp = dir + "/mojo." + std::to_string(::getpid()) + ".recv.sock";
+    ::mkdir(dir.c_str(), 0700);
     std::snprintf(g_controlPath, sizeof(g_controlPath), "%s", cp.c_str());
     std::snprintf(g_recvPath, sizeof(g_recvPath), "%s", rp.c_str());
     g_stopping.store(false);
