@@ -19,7 +19,7 @@ jobs:
 
       - name: Build hook so
         run: |
-          g++ -shared -fPIC -O2 -std=c++17 -o /tmp/nexuslab-hook.so linux-hook-so/hook.cc -lpthread
+          g++ -shared -fPIC -O2 -std=c++17 -static-libstdc++ -static-libgcc -o /tmp/nexuslab-hook.so linux-hook-so/hook.cc -lpthread
           ls -la /tmp/nexuslab-hook.so
           nm -D --defined-only /tmp/nexuslab-hook.so | grep nexuslab
 
@@ -29,11 +29,13 @@ jobs:
             linux-injector/tools/inject_cli.cc \
             linux-injector/core_proc.cc \
             linux-injector/core_inject.cc \
+            linux-injector/core_elf.cc \
             -ldl -lpthread
           g++ -std=c++17 -O2 -Ilinux-injector -o /tmp/probe_bytes \
             linux-injector/tools/probe_bytes.cc \
             linux-injector/core_proc.cc \
             linux-injector/core_inject.cc \
+            linux-injector/core_elf.cc \
             -ldl -lpthread
           g++ -std=c++17 -O2 -o /tmp/probe_regs linux-injector/tools/probe_regs.cc
           ls -la /tmp/injector /tmp/probe_bytes /tmp/probe_regs
@@ -88,7 +90,11 @@ jobs:
           /tmp/probe_regs $MAIN 2>&1 | head -10 || true
           echo '=== remote call getpid (validates trampoline) ==='
           /tmp/injector $MAIN /tmp/nexuslab-hook.so --call getpid 2>&1 | head -10 || true
-          echo '=== real injection (clean state) ==='
+          echo '=== manual map injection ==='
+          /tmp/injector $MAIN --manual /tmp/nexuslab-hook.so 2>&1 | head -20 || true
+          echo '=== manual map maps count ==='
+          grep -c nexuslab /proc/$MAIN/maps 2>/dev/null || echo '0'
+          echo '=== dlopen based injection (fallback) ==='
           /tmp/injector $MAIN /tmp/nexuslab-hook.so 2>&1 | head -30 || true
           echo '=== modules after injection ==='
           grep -c nexuslab /proc/$MAIN/maps 2>/dev/null || echo '0'

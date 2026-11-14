@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../core.h"
+#include "../core_elf.h"
 
 namespace {
 
@@ -72,6 +73,17 @@ int RunSymbolOnly(pid_t pid, const char* symbol) {
     return ok ? 0 : 1;
 }
 
+int RunManualInjection(pid_t pid, const char* libraryPath) {
+    using namespace nexuslab_linux;
+
+    unsigned long long base = 0;
+    unsigned long long initializers = 0;
+    const bool ok = InjectLibraryManual(pid, libraryPath, &base, &initializers);
+    std::printf("manual ok=%d base=0x%llx initializers=%llu error=%s\n", ok ? 1 : 0, base,
+                initializers, g_lastError.c_str());
+    return ok ? 0 : 1;
+}
+
 int RunInjection(pid_t pid, const char* libraryPath) {
     using namespace nexuslab_linux;
 
@@ -103,6 +115,10 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[3], "--call") == 0) {
             return RunSymbolOnly(pid, argv[4]);
         }
+    }
+
+    if (argc >= 4 && std::strcmp(argv[2], "--manual") == 0) {
+        return RunManualInjection(pid, argv[3]);
     }
 
     return RunInjection(pid, argv[2]);

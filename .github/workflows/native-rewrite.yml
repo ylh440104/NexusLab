@@ -61,7 +61,7 @@ jobs:
       - name: build hook so
         run: |
           cd linux-hook-so
-          g++ -shared -fPIC -O2 -std=c++17 -o nexuslab-linux-${{ matrix.arch }}.so hook.cc -lpthread
+          g++ -shared -fPIC -O2 -std=c++17 -static-libstdc++ -static-libgcc -o nexuslab-linux-${{ matrix.arch }}.so hook.cc -lpthread
           ls -la
       - name: stage artifact
         run: |
