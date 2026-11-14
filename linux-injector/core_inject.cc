@@ -392,10 +392,23 @@ unsigned long long EnsureRemoteStack(pid_t pid) {
     }
 
     unsigned long long base = 0;
-    if (!RemoteMapMemory(pid, kRemoteStackSize, 3, 0x22 | 0x100, &base)) {
+    if (!RemoteMapMemory(pid, kRemoteStackSize, 3, 0x22, &base)) {
         return 0;
     }
-    g_stackTop = (base + kRemoteStackSize) & ~0xFULL;
+
+    unsigned long long protResult = 0;
+#if defined(__aarch64__)
+    constexpr unsigned long long kMprotectNr = 226;
+#else
+    constexpr unsigned long long kMprotectNr = 10;
+#endif
+    const std::vector<unsigned long long> protArgs = {base, kRemoteStackSize, 3};
+    if (CallRemoteSyscall(pid, kMprotectNr, protArgs, &protResult) && protResult != 0) {
+        g_lastError = "mprotect(rw) failed for scratch stack " + ToHex(base);
+        return 0;
+    }
+
+    g_stackTop = (base + kRemoteStackSize / 2) & ~0xFULL;
     return g_stackTop;
 }
 
