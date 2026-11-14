@@ -416,11 +416,21 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
 #if defined(__aarch64__)
     const unsigned int trampoline[2] = {0xD63F00C0U, kBreakInstruction};
 #else
-    const unsigned char trampoline[3] = {0xFF, 0xD3, 0xCC};
+    const unsigned char trampoline[5] = {0x90, 0x90, 0xFF, 0xD3, 0xCC};
 #endif
 
     if (!WriteProcessMemory(pid, codeAddress, trampoline, sizeof(trampoline))) {
         g_lastError = "cannot install trampoline into target";
+        return false;
+    }
+
+    unsigned char verifyBytes[8] = {0};
+    if (!ReadProcessMemory(pid, codeAddress, verifyBytes, sizeof(trampoline))) {
+        g_lastError = "cannot read back trampoline at " + ToHex(codeAddress);
+        return false;
+    }
+    if (std::memcmp(verifyBytes, trampoline, sizeof(trampoline)) != 0) {
+        g_lastError = "trampoline read-back mismatch at " + ToHex(codeAddress);
         return false;
     }
 
@@ -429,7 +439,11 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
         ArgumentRegister(working, index) = args[index];
     }
 
+#if defined(__aarch64__)
     ProgramCounter(working) = codeAddress;
+#else
+    ProgramCounter(working) = codeAddress + 2;
+#endif
     StackPointer(working) = stackTop - 16;
     IndirectTarget(working) = address;
 #if defined(__aarch64__)
