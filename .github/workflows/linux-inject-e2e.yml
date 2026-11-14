@@ -83,12 +83,14 @@ jobs:
           echo "=== identify ==="
           cat /proc/$MAIN/comm; tr '\0' ' ' < /proc/$MAIN/cmdline; echo
           grep -c nexuslab /proc/$MAIN/maps || echo 'before=0'
+          echo '=== real injection (clean state) ==='
+          /tmp/injector $MAIN /tmp/nexuslab-hook.so 2>&1 | head -30 || true
+          echo '=== modules after injection ==='
+          grep -c nexuslab /proc/$MAIN/maps 2>/dev/null || echo '0'
           echo '=== byte-level symbol probe ==='
           /tmp/probe_bytes $MAIN dlopen 2>&1 | head -20 || true
           echo '=== plain function call probe (getpid) ==='
           /tmp/injector $MAIN /tmp/nexuslab-hook.so --symbol getpid 2>&1 | head -20 || true
-          echo '=== real injection ==='
-          /tmp/injector $MAIN /tmp/nexuslab-hook.so 2>&1 | head -30 || true
           sleep 3
           echo '=== maps ==='
           grep nexuslab /proc/$MAIN/maps || echo 'NO_MAPS'
