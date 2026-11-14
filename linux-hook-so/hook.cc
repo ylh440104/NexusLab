@@ -39,8 +39,8 @@ struct PipeHeader {
     uint32_t reserved;
 };
 
-std::string g_controlPath;
-std::string g_recvPath;
+char g_controlPath[108] = {0};
+char g_recvPath[108] = {0};
 std::atomic<bool> g_loaded{false};
 std::atomic<bool> g_stopping{false};
 std::thread g_controlThread;
@@ -91,19 +91,19 @@ void BuildHeader(uint8_t* out, uint16_t op, int32_t status, uint32_t flags,
     std::memcpy(out + 36, &msgLen, 4);
 }
 
-int MakeListener(const std::string& path) {
+int MakeListener(const char* path) {
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     struct sockaddr_un addr;
     std::memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
-    ::unlink(path.c_str());
+    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    ::unlink(path);
     if (::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
         ::close(fd);
         return -1;
     }
-    ::chmod(path.c_str(), 0600);
+    ::chmod(path, 0600);
     if (::listen(fd, 4) < 0) {
         ::close(fd);
         return -1;
@@ -119,7 +119,7 @@ bool SendHello(int fd, const char* name, uint32_t pid) {
 }
 
 void ControlSession(int fd) {
-    SendHello(fd, g_controlPath.c_str(), static_cast<uint32_t>(::getpid()));
+    SendHello(fd, g_controlPath, static_cast<uint32_t>(::getpid()));
     while (!g_stopping.load()) {
         struct pollfd pfd = { fd, POLLIN, 0 };
         int r = ::poll(&pfd, 1, 200);
@@ -164,11 +164,11 @@ void ControlLoop() {
         std::thread(ControlSession, fd).detach();
     }
     ::close(listener);
-    ::unlink(g_controlPath.c_str());
+    ::unlink(g_controlPath);
 }
 
 void RecvSession(int fd) {
-    SendHello(fd, g_recvPath.c_str(), static_cast<uint32_t>(::getpid()));
+    SendHello(fd, g_recvPath, static_cast<uint32_t>(::getpid()));
     while (!g_stopping.load()) {
         struct pollfd pfd = { fd, POLLIN, 0 };
         int r = ::poll(&pfd, 1, 500);
@@ -193,7 +193,7 @@ void RecvLoop() {
         std::thread(RecvSession, fd).detach();
     }
     ::close(listener);
-    ::unlink(g_recvPath.c_str());
+    ::unlink(g_recvPath);
 }
 
 std::string RuntimeDir() {
@@ -226,8 +226,10 @@ int nexuslab_linux_hook_is_loaded() {
 int nexuslab_linux_hook_start_dynamic(const char* runtimeDir) {
     if (g_loaded.load()) return 0;
     std::string dir = (runtimeDir && *runtimeDir) ? std::string(runtimeDir) : RuntimeDir();
-    g_controlPath = dir + "/mojo." + std::to_string(::getpid()) + ".control.sock";
-    g_recvPath = dir + "/mojo." + std::to_string(::getpid()) + ".recv.sock";
+    std::string cp = dir + "/mojo." + std::to_string(::getpid()) + ".control.sock";
+    std::string rp = dir + "/mojo." + std::to_string(::getpid()) + ".recv.sock";
+    std::snprintf(g_controlPath, sizeof(g_controlPath), "%s", cp.c_str());
+    std::snprintf(g_recvPath, sizeof(g_recvPath), "%s", rp.c_str());
     g_stopping.store(false);
     g_controlThread = std::thread(ControlLoop);
     g_recvThread = std::thread(RecvLoop);
@@ -240,23 +242,23 @@ int nexuslab_linux_hook_stop_dynamic() {
     g_stopping.store(true);
     if (g_controlThread.joinable()) g_controlThread.join();
     if (g_recvThread.joinable()) g_recvThread.join();
-    ::unlink(g_controlPath.c_str());
-    ::unlink(g_recvPath.c_str());
+    ::unlink(g_controlPath);
+    ::unlink(g_recvPath);
     g_loaded.store(false);
     return 1;
 }
 
 const char* nexuslab_linux_hook_control_socket() {
-    return g_controlPath.c_str();
+    return g_controlPath;
 }
 
 const char* nexuslab_linux_hook_recv_socket() {
-    return g_recvPath.c_str();
+    return g_recvPath;
 }
 
 }
 
-__attribute__((constructor)) static void nexuslab_auto_start() {
+__attribute__((constructor, used, visibility("default"))) void nexuslab_auto_start() {
     if (g_loaded.load()) {
         return;
     }
