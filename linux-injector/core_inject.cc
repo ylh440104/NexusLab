@@ -471,7 +471,9 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
                 WriteRegisters(pid, saved);
                 g_lastError = "target faulted during remote call: signal=" +
                               std::to_string(signal) + " pc=" + ToHex(faultPc) +
-                              " address=" + ToHex(address);
+                              " address=" + ToHex(address) +
+                              " codeSlot=" + ToHex(codeAddress) +
+                              " stackTop=" + ToHex(stackTop);
                 return false;
             }
             continue;
