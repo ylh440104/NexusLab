@@ -124,6 +124,25 @@ jobs:
           if errorlevel 1 exit /b 1
           copy /Y build\Release\nexuslab.node ..\packages\runtime\native\nexuslab-win32-x64.node
 
+      - name: Build linux hook library
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          g++ -shared -fPIC -O2 -std=c++17 -static-libstdc++ -static-libgcc \
+            -o packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.so \
+            linux-hook-so/hook.cc -lpthread
+          ls -la packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.so
+
+      - name: Build linux injector addon
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          cd linux-injector
+          npm install --ignore-scripts --no-audit --no-fund
+          npx node-gyp reconfigure || npx node-gyp configure
+          npx node-gyp build
+          cp build/Release/linux_injector.node \
+            ../packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.node
+          ls -la ../packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.node
+
       # Always builds the WebUI flavor — no separate "core-only" artifact.
       - name: Build project
         env:
