@@ -360,11 +360,13 @@ bool RemoteCall(pid_t pid, unsigned long fnAddress, const std::vector<unsigned l
         }
         int sig = WIFSTOPPED(status) ? WSTOPSIG(status) : 0;
         if (sig == SIGTRAP || sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig == SIGFPE) {
-            char buf[192];
+            char buf[320];
+            unsigned long code = 0;
+            ReadMemory(pid, REMOTE_PC(probe), &code, sizeof(code));
             std::snprintf(buf, sizeof(buf),
-                          "sig=%d pc=0x%lx sp=0x%lx ret=0x%lx after=0x%lx",
+                          "sig=%d pc=0x%lx sp=0x%lx ret=0x%lx after=0x%lx fn=0x%lx code=%016lx",
                           sig, REMOTE_PC(probe), REMOTE_SP(probe), retAddr,
-                          REMOTE_RET(probe));
+                          REMOTE_RET(probe), fnAddress, code);
             WriteMemory(pid, retAddr, &originalByte, 1);
             g_error = std::string("fatal signal during remote call: ") + buf;
             return false;
