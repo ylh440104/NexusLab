@@ -11,6 +11,8 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
+#include <cstdio>
 #include <cstring>
 
 namespace nexuslab_linux {
@@ -18,7 +20,13 @@ namespace nexuslab_linux {
 namespace {
 
 constexpr size_t kMaxArguments = 6;
-constexpr unsigned long kTrapOpcode = 0xCC;
+#if defined(__aarch64__)
+constexpr unsigned int kTrapInstruction = 0xD4200000U;
+constexpr size_t kTrapWidth = 4;
+#else
+constexpr unsigned int kTrapInstruction = 0xCCU;
+constexpr size_t kTrapWidth = 1;
+#endif
 constexpr unsigned long kMinValidStack = 0x10000UL;
 constexpr int kMaxSteps = 4096;
 
@@ -42,6 +50,15 @@ unsigned long long& ReturnValue(RemoteRegisters& registers) {
 
 unsigned long long& ArgumentRegister(RemoteRegisters& registers, size_t index) {
     return registers.gpr[index];
+}
+unsigned long long& SyscallNumber(RemoteRegisters& registers) {
+    return registers.gpr[8];
+}
+unsigned long long& SyscallArgumentRegister(RemoteRegisters& registers, size_t index) {
+    return registers.gpr[index];
+}
+unsigned long long& LinkRegister(RemoteRegisters& registers) {
+    return registers.gpr[30];
 }
 
 bool ReadRegisters(pid_t pid, RemoteRegisters* out) {
@@ -93,6 +110,31 @@ unsigned long long& ArgumentRegister(RemoteRegisters& registers, size_t index) {
     }
 }
 
+unsigned long long& SyscallNumber(RemoteRegisters& registers) {
+    return registers.native.orig_rax;
+}
+
+unsigned long long& LinkRegister(RemoteRegisters& registers) {
+    return registers.native.rsp;
+}
+
+unsigned long long& SyscallArgumentRegister(RemoteRegisters& registers, size_t index) {
+    switch (index) {
+        case 0:
+            return registers.native.rdi;
+        case 1:
+            return registers.native.rsi;
+        case 2:
+            return registers.native.rdx;
+        case 3:
+            return registers.native.r10;
+        case 4:
+            return registers.native.r8;
+        default:
+            return registers.native.r9;
+    }
+}
+
 bool ReadRegisters(pid_t pid, RemoteRegisters* out) {
     return ptrace(PTRACE_GETREGS, pid, nullptr, &out->native) == 0;
 }
@@ -123,12 +165,12 @@ bool WaitForStop(pid_t pid, int* outStatus) {
         if (WIFEXITED(status) || WIFSIGNALED(status)) {
             return false;
         }
+        }
     }
-}
 
-void UndoBreakpoint(pid_t pid, unsigned long long returnAddress, unsigned char originalByte,
+void UndoBreakpoint(pid_t pid, unsigned long long returnAddress, const unsigned char* originalBytes,
                     unsigned long long scratchStack, const unsigned char* snapshot) {
-    WriteProcessMemory(pid, returnAddress, &originalByte, 1);
+    WriteProcessMemory(pid, returnAddress, originalBytes, kTrapWidth);
     WriteProcessMemory(pid, scratchStack, snapshot, 16);
 }
 
@@ -136,16 +178,346 @@ void UndoBreakpoint(pid_t pid, unsigned long long returnAddress, unsigned char o
 
 std::string g_lastError;
 
+
+unsigned long long LocateSyscallInstruction(pid_t pid, unsigned long long functionEntry) {
+    unsigned char window[128] = {0};
+    if (!ReadProcessMemory(pid, functionEntry, window, sizeof(window))) {
+        return 0;
+    }
+
+#if defined(__aarch64__)
+    for (size_t offset = 0; offset + 4 <= sizeof(window); offset += 4) {
+        const unsigned int instruction =
+            static_cast<unsigned int>(window[offset]) |
+            (static_cast<unsigned int>(window[offset + 1]) << 8) |
+            (static_cast<unsigned int>(window[offset + 2]) << 16) |
+            (static_cast<unsigned int>(window[offset + 3]) << 24);
+        if (instruction == 0xD4000001U) {
+            return functionEntry + offset;
+        }
+    }
+#else
+    for (size_t offset = 0; offset + 2 <= sizeof(window); ++offset) {
+        if (window[offset] == 0x0F && window[offset + 1] == 0x05) {
+            return functionEntry + offset;
+        }
+    }
+#endif
+
+    return 0;
+}
+
+unsigned long long AllocateScratchStack(pid_t pid, unsigned long long nearAddress) {
+#if defined(__aarch64__)
+    constexpr unsigned long long kMmapSyscall = 222;
+#else
+    constexpr unsigned long long kMmapSyscall = 9;
+#endif
+    constexpr unsigned long long kStackSize = 64 * 1024;
+    constexpr unsigned long long kMapPrivateAnonymous = 0x02 | 0x20;
+
+    (void)nearAddress;
+    const std::vector<unsigned long long> arguments = {
+        0,
+        kStackSize,
+        3,
+        static_cast<unsigned long long>(kMapPrivateAnonymous),
+        static_cast<unsigned long long>(-1LL),
+        0,
+    };
+
+    unsigned long long base = 0;
+    if (!CallRemoteSyscall(pid, kMmapSyscall, arguments, &base)) {
+        return 0;
+    }
+    if (static_cast<long long>(base) < 0) {
+        return 0;
+    }
+#if defined(__aarch64__)
+    return (base + kStackSize) & ~0xFULL;
+#else
+    return ((base + kStackSize) & ~0xFULL) - 8;
+#endif
+}
+
+namespace {
+
+constexpr size_t kIndirectCallRegister = 6;
+constexpr unsigned int kBreakInstruction = 0xD4200000U;
+constexpr unsigned long long kRemoteStackSize = 2ULL * 1024 * 1024;
+
+unsigned long long g_codeSlot = 0;
+unsigned long long g_stackTop = 0;
+pid_t g_reservedPid = 0;
+
+std::string ToHex(unsigned long long value) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "0x%llx", value);
+    return std::string(buffer);
+}
+
+bool RemoteMapMemory(pid_t pid, unsigned long long length, int protection, int flags,
+                     unsigned long long* outAddress) {
+#if defined(__aarch64__)
+    constexpr unsigned long long kMmapSyscall = 222;
+#else
+    constexpr unsigned long long kMmapSyscall = 9;
+#endif
+    const std::vector<unsigned long long> arguments = {
+        0,
+        length,
+        static_cast<unsigned long long>(protection),
+        static_cast<unsigned long long>(flags),
+        static_cast<unsigned long long>(-1LL),
+        0,
+    };
+    unsigned long long result = 0;
+    if (!CallRemoteSyscall(pid, kMmapSyscall, arguments, &result)) {
+        return false;
+    }
+    if (static_cast<long long>(result) < 0) {
+        g_lastError = "remote mmap returned an error";
+        return false;
+    }
+    *outAddress = result;
+    return true;
+}
+
+
+unsigned long long EntryPointOf(pid_t pid, unsigned long long moduleBase) {
+    unsigned char header[64] = {0};
+    if (!ReadProcessMemory(pid, moduleBase, header, sizeof(header))) {
+        return 0;
+    }
+    if (header[0] != 0x7F || header[1] != 'E' || header[2] != 'L' || header[3] != 'F') {
+        return 0;
+    }
+    if (header[4] != 2) {
+        return 0;
+    }
+    unsigned long long entry = 0;
+    std::memcpy(&entry, header + 24, sizeof(entry));
+    return entry;
+}
+
+bool MakeWritable(pid_t pid, unsigned long long address, unsigned long long length) {
+#if defined(__aarch64__)
+    constexpr unsigned long long kMprotectSyscall = 226;
+#else
+    constexpr unsigned long long kMprotectSyscall = 10;
+#endif
+    const unsigned long long pageStart = address & ~0xFFFULL;
+    const unsigned long long pageEnd = (address + length + 0xFFFULL) & ~0xFFFULL;
+    const std::vector<unsigned long long> arguments = {
+        pageStart,
+        pageEnd - pageStart,
+        3,
+    };
+    unsigned long long result = 0;
+    if (!CallRemoteSyscall(pid, kMprotectSyscall, arguments, &result)) {
+        return false;
+    }
+    return result == 0;
+}
+
+constexpr unsigned long long kPathBufferSize = 4096;
+
+unsigned long long EnsurePathBuffer(pid_t pid) {
+    static pid_t cachedPid = 0;
+    static unsigned long long cached = 0;
+    if (cachedPid != pid) {
+        cachedPid = pid;
+        cached = 0;
+    }
+    if (cached != 0) {
+        return cached;
+    }
+    unsigned long long slot = 0;
+    if (!RemoteMapMemory(pid, kPathBufferSize, 3, 0x22, &slot)) {
+        return 0;
+    }
+    cached = slot;
+    return cached;
+}
+
+unsigned long long EnsureCodeSlot(pid_t pid) {
+    if (g_reservedPid != pid) {
+        g_codeSlot = 0;
+        g_stackTop = 0;
+        g_reservedPid = pid;
+    }
+    if (g_codeSlot != 0) {
+        return g_codeSlot;
+    }
+
+    unsigned long long slot = 0;
+    if (!RemoteMapMemory(pid, 0x1000, 7, 0x22, &slot)) {
+        return 0;
+    }
+
+    g_codeSlot = slot;
+    return g_codeSlot;
+}
+
+unsigned long long EnsureRemoteStack(pid_t pid) {
+    if (g_reservedPid != pid) {
+        g_codeSlot = 0;
+        g_stackTop = 0;
+        g_reservedPid = pid;
+    }
+    if (g_stackTop != 0) {
+        return g_stackTop;
+    }
+
+    unsigned long long base = 0;
+    if (!RemoteMapMemory(pid, kRemoteStackSize, 3, 0x22 | 0x100, &base)) {
+        return 0;
+    }
+    g_stackTop = (base + kRemoteStackSize) & ~0xFULL;
+    return g_stackTop;
+}
+
+}
+
 bool CallRemoteFunction(pid_t pid, unsigned long long address,
                         const std::vector<unsigned long long>& args,
                         unsigned long long* outReturn) {
-    RemoteRegisters saved;
-    if (!ReadRegisters(pid, &saved)) {
-        g_lastError = "cannot read target registers";
+    if (address == 0) {
+        g_lastError = "remote call target address is zero";
         return false;
     }
 
-    const unsigned long long returnAddress = ProgramCounter(saved);
+    const unsigned long long codeAddress = EnsureCodeSlot(pid);
+    if (codeAddress == 0) {
+        return false;
+    }
+
+    const unsigned long long stackTop = EnsureRemoteStack(pid);
+    if (stackTop == 0) {
+        return false;
+    }
+
+    RemoteRegisters saved;
+    if (!ReadRegisters(pid, &saved)) {
+        g_lastError = "cannot read target registers before remote call";
+        return false;
+    }
+
+#if defined(__aarch64__)
+    const unsigned int trampoline[2] = {0xD63F00C0U, kBreakInstruction};
+#else
+    const unsigned int trampoline[2] = {0xCCCCCCCCU, 0xCCCCCCCCU};
+#endif
+
+    if (!WriteProcessMemory(pid, codeAddress, trampoline, sizeof(trampoline))) {
+        g_lastError = "cannot install trampoline into target";
+        return false;
+    }
+
+    RemoteRegisters working = saved;
+    for (size_t index = 0; index < args.size() && index < kMaxArguments; ++index) {
+        ArgumentRegister(working, index) = args[index];
+    }
+
+    ProgramCounter(working) = codeAddress;
+    StackPointer(working) = stackTop - 16;
+#if defined(__aarch64__)
+    ArgumentRegister(working, kIndirectCallRegister) = address;
+    LinkRegister(working) = codeAddress;
+#else
+    ArgumentRegister(working, kIndirectCallRegister) = address;
+#endif
+
+    if (!WriteRegisters(pid, working)) {
+        g_lastError = "cannot apply registers for remote call";
+        return false;
+    }
+
+    bool completed = false;
+    unsigned long long result = 0;
+
+    for (int step = 0; step < kMaxSteps; ++step) {
+        if (ptrace(PTRACE_CONT, pid, nullptr, nullptr) != 0) {
+            WriteRegisters(pid, saved);
+            g_lastError = "cannot resume target process for remote call";
+            return false;
+        }
+
+        int status = 0;
+        if (!WaitForStop(pid, &status)) {
+            g_lastError = "target process exited during remote call";
+            return false;
+        }
+        if (!WIFSTOPPED(status)) {
+            continue;
+        }
+
+        const int signal = WSTOPSIG(status);
+        if (signal != SIGTRAP) {
+            if (signal == SIGSEGV || signal == SIGBUS || signal == SIGILL) {
+                RemoteRegisters faultRegs;
+                unsigned long long faultPc = 0;
+                if (ReadRegisters(pid, &faultRegs)) {
+                    faultPc = ProgramCounter(faultRegs);
+                }
+                WriteRegisters(pid, saved);
+                g_lastError = "target faulted during remote call: signal=" +
+                              std::to_string(signal) + " pc=" + ToHex(faultPc) +
+                              " address=" + ToHex(address);
+                return false;
+            }
+            continue;
+        }
+
+        RemoteRegisters probe;
+        if (!ReadRegisters(pid, &probe)) {
+            g_lastError = "cannot read target registers after remote call stop";
+            return false;
+        }
+
+        const unsigned long long currentPc = ProgramCounter(probe);
+        if (currentPc == codeAddress || currentPc == codeAddress + 4) {
+            result = ReturnValue(probe);
+            completed = true;
+            break;
+        }
+    }
+
+    WriteRegisters(pid, saved);
+
+    if (!completed) {
+        g_lastError = "remote call did not return to the trampoline";
+        return false;
+    }
+
+    if (outReturn != nullptr) {
+        *outReturn = result;
+    }
+    return true;
+}
+
+
+bool CallRemoteSyscall(pid_t pid, unsigned long long syscallNumber,
+                       const std::vector<unsigned long long>& args,
+                       unsigned long long* outReturn) {
+    const unsigned long long syscallEntry = ResolveRemoteSymbol(pid, "syscall");
+    if (syscallEntry == 0) {
+        g_lastError = "cannot resolve libc syscall inside target";
+        return false;
+    }
+
+    const unsigned long long svcAddress = LocateSyscallInstruction(pid, syscallEntry);
+    if (svcAddress == 0) {
+        g_lastError = "cannot locate svc instruction inside target libc";
+        return false;
+    }
+
+    RemoteRegisters saved;
+    if (!ReadRegisters(pid, &saved)) {
+        g_lastError = "cannot read target registers before syscall";
+        return false;
+    }
+
     const unsigned long long previousStack = StackPointer(saved);
     if (previousStack <= kMinValidStack) {
         g_lastError = "target stack pointer looks invalid";
@@ -159,126 +531,63 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
         return false;
     }
 
-    const unsigned long syntheticReturn = returnAddress;
-    if (!WriteProcessMemory(pid, scratchStack, &syntheticReturn, sizeof(syntheticReturn))) {
-        g_lastError = "cannot install return address on target stack";
-        return false;
-    }
-
-    unsigned char originalByte = 0;
-    if (!ReadProcessMemory(pid, returnAddress, &originalByte, 1)) {
-        WriteProcessMemory(pid, scratchStack, stackSnapshot, sizeof(stackSnapshot));
-        g_lastError = "cannot read instruction byte at return address";
-        return false;
-    }
-
-    const unsigned char trapByte = static_cast<unsigned char>(kTrapOpcode);
-    if (!WriteProcessMemory(pid, returnAddress, &trapByte, 1)) {
-        WriteProcessMemory(pid, scratchStack, stackSnapshot, sizeof(stackSnapshot));
-        g_lastError = "cannot install breakpoint in target";
-        return false;
-    }
-
     RemoteRegisters working = saved;
     for (size_t index = 0; index < args.size() && index < kMaxArguments; ++index) {
-        ArgumentRegister(working, index) = args[index];
+        SyscallArgumentRegister(working, index) = args[index];
     }
-    ProgramCounter(working) = address;
+    SyscallNumber(working) = syscallNumber;
+    ProgramCounter(working) = svcAddress;
     StackPointer(working) = scratchStack;
 
     if (!WriteRegisters(pid, working)) {
-        UndoBreakpoint(pid, returnAddress, originalByte, scratchStack, stackSnapshot);
-        g_lastError = "cannot apply registers to target";
+        WriteProcessMemory(pid, scratchStack, stackSnapshot, sizeof(stackSnapshot));
+        g_lastError = "cannot apply registers for syscall";
         return false;
     }
 
-    bool completed = false;
-    unsigned long long result = 0;
-
-    for (int step = 0; step < kMaxSteps; ++step) {
-        if (ptrace(PTRACE_CONT, pid, nullptr, nullptr) != 0) {
-            UndoBreakpoint(pid, returnAddress, originalByte, scratchStack, stackSnapshot);
-            g_lastError = "cannot resume target process";
-            return false;
-        }
-
-        int status = 0;
-        if (!WaitForStop(pid, &status)) {
-            g_lastError = "target process exited during remote call";
-            return false;
-        }
-        if (!WIFSTOPPED(status)) {
-            continue;
-        }
-
-        int signal = WSTOPSIG(status);
-        if (signal == SIGTRAP) {
-            RemoteRegisters probe;
-            if (!ReadRegisters(pid, &probe)) {
-                UndoBreakpoint(pid, returnAddress, originalByte, scratchStack, stackSnapshot);
-                g_lastError = "cannot read target registers after stop";
-                return false;
-            }
-            const unsigned long long currentPc = ProgramCounter(probe);
-            if (currentPc == returnAddress + 1) {
-                ProgramCounter(probe) = returnAddress;
-                WriteRegisters(pid, probe);
-                result = ReturnValue(probe);
-                completed = true;
-                break;
-            }
-            if (currentPc == returnAddress) {
-                result = ReturnValue(probe);
-                completed = true;
-                break;
-            }
-            continue;
-        }
-
-        if (signal == SIGSEGV || signal == SIGBUS || signal == SIGILL || signal == SIGFPE) {
-            RemoteRegisters faulted;
-            unsigned long long faultPc = 0;
-            if (ReadRegisters(pid, &faulted)) {
-                faultPc = ProgramCounter(faulted);
-            }
-            char detail[192];
-            std::snprintf(detail, sizeof(detail), "signal=%d pc=0x%lx address=0x%lx", signal,
-                          faultPc, address);
-            UndoBreakpoint(pid, returnAddress, originalByte, scratchStack, stackSnapshot);
-            g_lastError = std::string("target faulted during remote call: ") + detail;
-            return false;
-        }
-
-        ptrace(PTRACE_CONT, pid, nullptr, signal);
+    if (ptrace(PTRACE_SINGLESTEP, pid, nullptr, nullptr) != 0) {
+        WriteProcessMemory(pid, scratchStack, stackSnapshot, sizeof(stackSnapshot));
+        WriteRegisters(pid, saved);
+        g_lastError = "cannot single step the syscall instruction";
+        return false;
     }
 
-    UndoBreakpoint(pid, returnAddress, originalByte, scratchStack, stackSnapshot);
+    int status = 0;
+    if (!WaitForStop(pid, &status)) {
+        WriteProcessMemory(pid, scratchStack, stackSnapshot, sizeof(stackSnapshot));
+        g_lastError = "target process exited during syscall step";
+        return false;
+    }
 
-    if (!completed) {
-        g_lastError = "remote call did not reach the return breakpoint";
+    RemoteRegisters after;
+    if (!ReadRegisters(pid, &after)) {
+        WriteProcessMemory(pid, scratchStack, stackSnapshot, sizeof(stackSnapshot));
+        g_lastError = "cannot read target registers after syscall step";
+        return false;
+    }
+
+    const unsigned long long syscallResult = ReturnValue(after);
+
+    WriteRegisters(pid, saved);
+    WriteProcessMemory(pid, scratchStack, stackSnapshot, sizeof(stackSnapshot));
+
+    if (!WIFSTOPPED(status)) {
+        g_lastError = "target did not stop after syscall step";
         return false;
     }
 
     if (outReturn != nullptr) {
-        *outReturn = result;
+        *outReturn = syscallResult;
     }
     return true;
 }
 
 bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long long* outHandle,
                    unsigned long long* outBase) {
-    const unsigned long long dlopenAddress = ResolveRemoteSymbol(pid, "dlopen");
-    if (dlopenAddress == 0) {
-        g_lastError = "cannot resolve dlopen inside target";
-        return false;
-    }
-    const unsigned long long dlerrorAddress = ResolveRemoteSymbol(pid, "dlerror");
-
     if (ptrace(PTRACE_ATTACH, pid, nullptr, nullptr) != 0) {
         g_lastError = "ptrace attach rejected (need matching uid or CAP_SYS_PTRACE)";
         return false;
     }
-
     int status = 0;
     if (!WaitForStop(pid, &status)) {
         ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
@@ -286,31 +595,40 @@ bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long long
         return false;
     }
 
-    RemoteRegisters entry;
-    if (!ReadRegisters(pid, &entry)) {
+    const unsigned long long dlopenAddress = ResolveRemoteSymbol(pid, "dlopen");
+    if (dlopenAddress == 0) {
         ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
-        g_lastError = "cannot read target registers after attach";
+        g_lastError = "cannot resolve dlopen inside target";
         return false;
     }
+    const unsigned long long dlerrorAddress = ResolveRemoteSymbol(pid, "dlerror");
 
-    const unsigned long long pathSlot = (StackPointer(entry) - 8192) & ~0xFUL;
-    if (pathSlot <= kMinValidStack) {
+    unsigned long long pathSlot = 0;
+    {
+        const std::vector<unsigned long long> mapArguments = {
+            0, 4096, 3, 0x22, static_cast<unsigned long long>(-1LL), 0};
+#if defined(__aarch64__)
+        constexpr unsigned long long kMmapNr = 222;
+#else
+        constexpr unsigned long long kMmapNr = 9;
+#endif
+        if (!CallRemoteSyscall(pid, kMmapNr, mapArguments, &pathSlot)) {
+            ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
+            g_lastError = "cannot allocate a path buffer inside target";
+            return false;
+        }
+    }
+    if (pathSlot == 0) {
         ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
-        g_lastError = "no usable scratch space on target stack";
+        g_lastError = "cannot allocate a path buffer inside target";
         return false;
     }
-
-    unsigned char pathSnapshot[512] = {0};
     const size_t pathLength = libraryPath.size() + 1;
-    const size_t snapshotSize =
-        pathLength < sizeof(pathSnapshot) ? pathLength : sizeof(pathSnapshot);
-
-    if (!ReadProcessMemory(pid, pathSlot, pathSnapshot, snapshotSize)) {
+    if (pathLength > kPathBufferSize) {
         ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
-        g_lastError = "cannot snapshot scratch area on target stack";
+        g_lastError = "library path is too long for the remote buffer";
         return false;
     }
-
     if (!WriteProcessMemory(pid, pathSlot, libraryPath.c_str(), pathLength)) {
         ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
         g_lastError = "cannot write library path into target";
@@ -322,8 +640,7 @@ bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long long
     const bool called = CallRemoteFunction(pid, dlopenAddress, callArguments, &handle);
 
     if (!called) {
-        WriteProcessMemory(pid, pathSlot, pathSnapshot, snapshotSize);
-        ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
+                ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
         return false;
     }
 
@@ -341,14 +658,11 @@ bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long long
                 }
             }
         }
-        WriteProcessMemory(pid, pathSlot, pathSnapshot, snapshotSize);
-        ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
+                ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
         g_lastError = message;
         return false;
     }
 
-    WriteProcessMemory(pid, pathSlot, pathSnapshot, snapshotSize);
-    ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
 
     if (outHandle != nullptr) {
         *outHandle = handle;
@@ -356,6 +670,7 @@ bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long long
     if (outBase != nullptr) {
         *outBase = FindModuleBase(pid, libraryPath.c_str());
     }
+    ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
     return true;
 }
 

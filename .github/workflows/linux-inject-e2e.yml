@@ -29,13 +29,11 @@ jobs:
             linux-injector/tools/inject_cli.cc \
             linux-injector/core_proc.cc \
             linux-injector/core_inject.cc \
-            linux-injector/core_elf.cc \
             -ldl -lpthread
           g++ -std=c++17 -O2 -Ilinux-injector -o /tmp/probe_bytes \
             linux-injector/tools/probe_bytes.cc \
             linux-injector/core_proc.cc \
             linux-injector/core_inject.cc \
-            linux-injector/core_elf.cc \
             -ldl -lpthread
           g++ -std=c++17 -O2 -o /tmp/probe_regs linux-injector/tools/probe_regs.cc
           ls -la /tmp/injector /tmp/probe_bytes /tmp/probe_regs
@@ -86,16 +84,16 @@ jobs:
           echo "=== identify ==="
           cat /proc/$MAIN/comm; tr '\0' ' ' < /proc/$MAIN/cmdline; echo
           grep -c nexuslab /proc/$MAIN/maps || echo 'before=0'
-          echo '=== manual map injection ==='
-          /tmp/injector $MAIN --manual /tmp/nexuslab-hook.so 2>&1 | head -20 || true
-          echo '=== manual map maps count ==='
-          grep -c nexuslab /proc/$MAIN/maps 2>/dev/null || echo '0'
-          echo '=== register write fidelity ==='
-          /tmp/probe_regs $MAIN 2>&1 | head -10 || true
-          echo '=== remote call getpid (validates trampoline) ==='
+          echo '=== remote call getpid (validates blr trampoline) ==='
           /tmp/injector $MAIN /tmp/nexuslab-hook.so --call getpid 2>&1 | head -10 || true
-          echo '=== dlopen based injection (fallback) ==='
+          echo '=== real dlopen injection ==='
           /tmp/injector $MAIN /tmp/nexuslab-hook.so 2>&1 | head -30 || true
+          echo '=== target alive after injection ==='
+          kill -0 $MAIN 2>/dev/null && echo ALIVE || echo DEAD
+          echo '=== hook library mapped ==='
+          grep -c nexuslab /proc/$MAIN/maps 2>/dev/null || echo '0'
+          echo '=== runtime sockets ==='
+          ls -la "$XDG_RUNTIME_DIR/nexuslab" 2>/dev/null || echo 'NO_SOCKET_DIR'
           echo '=== modules after injection ==='
           grep -c nexuslab /proc/$MAIN/maps 2>/dev/null || echo '0'
           echo '=== byte-level symbol probe ==='

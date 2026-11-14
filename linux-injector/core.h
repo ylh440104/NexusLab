@@ -37,6 +37,9 @@ unsigned long long ResolveRemoteSymbol(pid_t pid, const char* symbol);
 bool CallRemoteFunction(pid_t pid, unsigned long long address,
                         const std::vector<unsigned long long>& args,
                         unsigned long long* outReturn);
+bool CallRemoteSyscall(pid_t pid, unsigned long long syscallNumber,
+                       const std::vector<unsigned long long>& args,
+                       unsigned long long* outReturn);
 
 bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long long* outHandle,
                    unsigned long long* outBase);
