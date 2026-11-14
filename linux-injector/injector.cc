@@ -262,7 +262,7 @@ struct RemoteRegs {
 #define REMOTE_PC(rs) ((rs).u.rip)
 #define REMOTE_SP(rs) ((rs).u.rsp)
 #define REMOTE_SYSNR(rs) ((rs).u.orig_rax)
-#define REMOTE_ARG(rs, i) ((i) == 0 ? (rs).u.rdi : (i) == 1 ? (rs).u.rsi : (i) == 2 ? (rs).u.rdx : (i) == 3 ? (rs).u.r10 : (i) == 4 ? (rs).u.r8 : (rs).u.r9)
+#define REMOTE_ARG(rs, i) ((i) == 0 ? (rs).u.rdi : (i) == 1 ? (rs).u.rsi : (i) == 2 ? (rs).u.rdx : (i) == 3 ? (rs).u.rcx : (i) == 4 ? (rs).u.r8 : (rs).u.r9)
 #define REMOTE_RET(rs) ((rs).u.rax)
 #endif
 
@@ -308,8 +308,8 @@ bool RemoteCall(pid_t pid, unsigned long fnAddress, const std::vector<unsigned l
     }
 
     unsigned long retAddr = REMOTE_PC(regs);
-    unsigned long sp = REMOTE_SP(regs) - 16;
-    sp &= ~0xFUL;
+    unsigned long sp = REMOTE_SP(regs) & ~0xFUL;
+    sp -= 8;
     unsigned long trampoline = 0;
     if (!WriteMemory(pid, sp, &trampoline, sizeof(trampoline))) {
         g_error = "cannot write return address to target stack";
