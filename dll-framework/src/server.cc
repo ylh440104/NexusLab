@@ -61,8 +61,7 @@ bool WaitForConnection(HANDLE pipe, HANDLE stopEvent) {
         }
         BOOL connected = ConnectNamedPipe(pipe, nullptr);
         if (connected) {
-            Sleep(kListenSleepMs);
-            continue;
+            return true;
         }
         DWORD err = GetLastError();
         if (err == ERROR_PIPE_CONNECTED) {
@@ -73,7 +72,8 @@ bool WaitForConnection(HANDLE pipe, HANDLE stopEvent) {
             continue;
         }
         if (err == ERROR_NO_DATA) {
-            return false;
+            Sleep(kNoDataSleepMs);
+            continue;
         }
         if (err == ERROR_INVALID_HANDLE) {
             return false;
@@ -86,6 +86,7 @@ bool WaitForConnection(HANDLE pipe, HANDLE stopEvent) {
 bool ReadExact(HANDLE pipe, HANDLE stopEvent, void* buffer, size_t length) {
     uint8_t* cursor = static_cast<uint8_t*>(buffer);
     size_t remaining = length;
+    DWORD idleSince = GetTickCount();
 
     while (remaining != 0) {
         if (Stopped(stopEvent)) {
@@ -99,20 +100,25 @@ bool ReadExact(HANDLE pipe, HANDLE stopEvent, void* buffer, size_t length) {
         if (!ok) {
             DWORD err = GetLastError();
             if (err == ERROR_NO_DATA) {
+                if (GetTickCount() - idleSince > kWriteStallMs) {
+                    return false;
+                }
                 Sleep(kNoDataSleepMs);
                 continue;
             }
             return false;
         }
-
         if (read == 0) {
-            return false;
+            if (GetTickCount() - idleSince > kWriteStallMs) {
+                return false;
+            }
+            Sleep(kNoDataSleepMs);
+            continue;
         }
-
+        idleSince = GetTickCount();
         cursor += read;
         remaining -= read;
     }
-
     return true;
 }
 

@@ -485,6 +485,20 @@ int main(int argc, char** argv) {
     pid_t pid = static_cast<pid_t>(std::atoi(argv[1]));
     std::string path = argv[2];
     std::printf("target pid=%d so=%s\n", static_cast<int>(pid), path.c_str());
+    unsigned long gp = ResolveRemoteSymbol(pid, "getpid");
+    std::printf("remote getpid=0x%lx (target pid=%d)\n", gp, (int)pid);
+    if (gp != 0) {
+        if (ptrace(PTRACE_ATTACH, pid, nullptr, nullptr) != 0) {
+            std::printf("selftest attach failed\n");
+        } else {
+            int st = 0; waitpid(pid, &st, __WALL);
+            RegsBackup bk; unsigned long rv = 0;
+            bool okg = RemoteCall(pid, gp, {}, &bk, &rv);
+            std::printf("getpid self-test: ok=%d ret=%lu err=%s\n", okg?1:0, rv, g_error.c_str());
+            if (bk.valid) SetRegs(pid, &bk.regs);
+            ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
+        }
+    }
     unsigned long base = 0;
     bool ok = InjectLibrary(pid, path, nullptr, &base);
     std::printf("inject ok=%d err=%s\n", ok ? 1 : 0, g_error.c_str());

@@ -253,12 +253,23 @@ bool QueryFileHolders(const std::wstring& path, std::vector<HolderEntry>& holder
         return false;
     }
 
-    std::vector<RM_PROCESS_INFO> buffer(needed);
-    held = needed;
-    result = RmGetList(sessionHandle, &needed, &held, buffer.data(), &reasons);
+    std::vector<RM_PROCESS_INFO> buffer;
+    for (int round = 0; round < 8; ++round) {
+        buffer.resize(needed);
+        held = needed;
+        result = RmGetList(sessionHandle, &needed, &held, buffer.data(), &reasons);
+        if (result == ERROR_SUCCESS) {
+            break;
+        }
+        if (result != ERROR_MORE_DATA) {
+            RmEndSession(sessionHandle);
+            error = "RmGetList fill failed: " + std::to_string(static_cast<int>(result));
+            return false;
+        }
+    }
     if (result != ERROR_SUCCESS) {
         RmEndSession(sessionHandle);
-        error = "RmGetList fill failed: " + std::to_string(static_cast<int>(result));
+        error = "RmGetList still unstable after retries: " + std::to_string(static_cast<int>(result));
         return false;
     }
 
