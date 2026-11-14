@@ -127,21 +127,28 @@ jobs:
       - name: Build linux hook library
         if: startsWith(matrix.os, 'ubuntu')
         run: |
+          ARCH="${TARGET#linux-}"
           g++ -shared -fPIC -O2 -std=c++17 -static-libstdc++ -static-libgcc \
-            -o packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.so \
+            -o "packages/runtime/native/nexuslab-linux-${ARCH}.so" \
             linux-hook-so/hook.cc -lpthread
-          ls -la packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.so
+          ls -la "packages/runtime/native/nexuslab-linux-${ARCH}.so"
+          readelf -d "packages/runtime/native/nexuslab-linux-${ARCH}.so" | grep NEEDED || true
+        env:
+          TARGET: ${{ matrix.target }}
 
       - name: Build linux injector addon
         if: startsWith(matrix.os, 'ubuntu')
         run: |
+          ARCH="${TARGET#linux-}"
           cd linux-injector
           npm install --ignore-scripts --no-audit --no-fund
           npx node-gyp configure
           npx node-gyp build
           cp build/Release/linux_injector.node \
-            ../packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.node
-          ls -la ../packages/runtime/native/nexuslab-linux-${{ matrix.arch }}.node
+            "../packages/runtime/native/nexuslab-linux-${ARCH}.node"
+          ls -la "../packages/runtime/native/nexuslab-linux-${ARCH}.node"
+        env:
+          TARGET: ${{ matrix.target }}
 
       # Always builds the WebUI flavor — no separate "core-only" artifact.
       - name: Build project
