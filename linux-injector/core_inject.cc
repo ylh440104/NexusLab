@@ -25,22 +25,22 @@ constexpr int kMaxSteps = 4096;
 #if defined(__aarch64__)
 
 struct RemoteRegisters {
-    unsigned long gpr[34];
+    unsigned long long gpr[34];
 };
 
-unsigned long& ProgramCounter(RemoteRegisters& registers) {
+unsigned long long& ProgramCounter(RemoteRegisters& registers) {
     return registers.gpr[32];
 }
 
-unsigned long& StackPointer(RemoteRegisters& registers) {
+unsigned long long& StackPointer(RemoteRegisters& registers) {
     return registers.gpr[31];
 }
 
-unsigned long& ReturnValue(RemoteRegisters& registers) {
+unsigned long long& ReturnValue(RemoteRegisters& registers) {
     return registers.gpr[0];
 }
 
-unsigned long& ArgumentRegister(RemoteRegisters& registers, size_t index) {
+unsigned long long& ArgumentRegister(RemoteRegisters& registers, size_t index) {
     return registers.gpr[index];
 }
 
@@ -53,7 +53,7 @@ bool ReadRegisters(pid_t pid, RemoteRegisters* out) {
 
 bool WriteRegisters(pid_t pid, const RemoteRegisters& registers) {
     struct iovec vector;
-    vector.iov_base = const_cast<unsigned long*>(registers.gpr);
+    vector.iov_base = const_cast<unsigned long long*>(registers.gpr);
     vector.iov_len = sizeof(registers.gpr);
     return ptrace(PTRACE_SETREGSET, pid, reinterpret_cast<void*>(NT_PRSTATUS), &vector) == 0;
 }
@@ -64,19 +64,19 @@ struct RemoteRegisters {
     struct user_regs_struct native;
 };
 
-unsigned long& ProgramCounter(RemoteRegisters& registers) {
+unsigned long long& ProgramCounter(RemoteRegisters& registers) {
     return registers.native.rip;
 }
 
-unsigned long& StackPointer(RemoteRegisters& registers) {
+unsigned long long& StackPointer(RemoteRegisters& registers) {
     return registers.native.rsp;
 }
 
-unsigned long& ReturnValue(RemoteRegisters& registers) {
+unsigned long long& ReturnValue(RemoteRegisters& registers) {
     return registers.native.rax;
 }
 
-unsigned long& ArgumentRegister(RemoteRegisters& registers, size_t index) {
+unsigned long long& ArgumentRegister(RemoteRegisters& registers, size_t index) {
     switch (index) {
         case 0:
             return registers.native.rdi;
@@ -126,8 +126,8 @@ bool WaitForStop(pid_t pid, int* outStatus) {
     }
 }
 
-void UndoBreakpoint(pid_t pid, unsigned long returnAddress, unsigned char originalByte,
-                    unsigned long scratchStack, const unsigned char* snapshot) {
+void UndoBreakpoint(pid_t pid, unsigned long long returnAddress, unsigned char originalByte,
+                    unsigned long long scratchStack, const unsigned char* snapshot) {
     WriteProcessMemory(pid, returnAddress, &originalByte, 1);
     WriteProcessMemory(pid, scratchStack, snapshot, 16);
 }
@@ -144,14 +144,14 @@ bool CallRemoteFunction(pid_t pid, unsigned long address, const std::vector<unsi
         return false;
     }
 
-    const unsigned long returnAddress = ProgramCounter(saved);
-    const unsigned long previousStack = StackPointer(saved);
+    const unsigned long long returnAddress = ProgramCounter(saved);
+    const unsigned long long previousStack = StackPointer(saved);
     if (previousStack <= kMinValidStack) {
         g_lastError = "target stack pointer looks invalid";
         return false;
     }
 
-    const unsigned long scratchStack = (previousStack & ~0xFUL) - 8;
+    const unsigned long long scratchStack = (previousStack & ~0xFUL) - 8;
     unsigned char stackSnapshot[16] = {0};
     if (!ReadProcessMemory(pid, scratchStack, stackSnapshot, sizeof(stackSnapshot))) {
         g_lastError = "cannot snapshot target stack memory";
@@ -192,7 +192,7 @@ bool CallRemoteFunction(pid_t pid, unsigned long address, const std::vector<unsi
     }
 
     bool completed = false;
-    unsigned long result = 0;
+    unsigned long long result = 0;
 
     for (int step = 0; step < kMaxSteps; ++step) {
         if (ptrace(PTRACE_CONT, pid, nullptr, nullptr) != 0) {
@@ -218,7 +218,7 @@ bool CallRemoteFunction(pid_t pid, unsigned long address, const std::vector<unsi
                 g_lastError = "cannot read target registers after stop";
                 return false;
             }
-            const unsigned long currentPc = ProgramCounter(probe);
+            const unsigned long long currentPc = ProgramCounter(probe);
             if (currentPc == returnAddress + 1) {
                 ProgramCounter(probe) = returnAddress;
                 WriteRegisters(pid, probe);
@@ -236,7 +236,7 @@ bool CallRemoteFunction(pid_t pid, unsigned long address, const std::vector<unsi
 
         if (signal == SIGSEGV || signal == SIGBUS || signal == SIGILL || signal == SIGFPE) {
             RemoteRegisters faulted;
-            unsigned long faultPc = 0;
+            unsigned long long faultPc = 0;
             if (ReadRegisters(pid, &faulted)) {
                 faultPc = ProgramCounter(faulted);
             }
@@ -292,7 +292,7 @@ bool InjectLibrary(pid_t pid, const std::string& libraryPath, unsigned long* out
         return false;
     }
 
-    const unsigned long pathSlot = (StackPointer(entry) - 8192) & ~0xFUL;
+    const unsigned long long pathSlot = (StackPointer(entry) - 8192) & ~0xFUL;
     if (pathSlot <= kMinValidStack) {
         ptrace(PTRACE_DETACH, pid, nullptr, nullptr);
         g_lastError = "no usable scratch space on target stack";
