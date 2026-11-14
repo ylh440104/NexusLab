@@ -360,8 +360,8 @@ unsigned long long EnsureCodeSlot(pid_t pid) {
         return g_codeSlot;
     }
 
-    unsigned long long slot = 0;
-    if (!RemoteMapMemory(pid, 0x1000, 7, 0x22, &slot)) {
+    unsigned long long mapping = 0;
+    if (!RemoteMapMemory(pid, 0x2000, 7, 0x22, &mapping)) {
         return 0;
     }
 
@@ -371,13 +371,13 @@ unsigned long long EnsureCodeSlot(pid_t pid) {
 #else
     constexpr unsigned long long kMprotectNr = 10;
 #endif
-    const std::vector<unsigned long long> protArgs = {slot, 0x1000, 7};
+    const std::vector<unsigned long long> protArgs = {mapping, 0x2000, 7};
     if (CallRemoteSyscall(pid, kMprotectNr, protArgs, &protResult) && protResult != 0) {
-        g_lastError = "mprotect(rwx) failed for code slot " + ToHex(slot);
+        g_lastError = "mprotect(rwx) failed for code slot " + ToHex(mapping);
         return 0;
     }
 
-    g_codeSlot = slot;
+    g_codeSlot = mapping + 0x100;
     return g_codeSlot;
 }
 
