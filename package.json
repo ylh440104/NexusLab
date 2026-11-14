@@ -1,7 +1,7 @@
 {
   "license": "AGPL-3.0",
   "name": "nexuslab-monorepo",
-  "version": "2.5.6",
+  "version": "2.5.7",
   "description": "NexusLab monorepo workspace (pnpm)",
   "private": true,
   "type": "module",

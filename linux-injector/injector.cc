@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core.h"
+#include "core_elf.h"
 namespace {
 
 using namespace nexuslab_linux;
@@ -277,10 +278,46 @@ Napi::Value DescribeBackend(const Napi::CallbackInfo& info) {
 
 }
 
+Napi::Value LoadModuleManual(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    const pid_t pid = ReadPidArgument(info, 0);
+    const std::string libraryPath = ReadStringArgument(info, 1);
+
+    if (pid == 0) {
+        return RejectedPromise(env, "a valid target pid is required");
+    }
+    if (libraryPath.empty()) {
+        return RejectedPromise(env, "a library path is required");
+    }
+
+    auto base = std::make_shared<unsigned long long>(0);
+    auto initializers = std::make_shared<unsigned long long>(0);
+    auto mapped = std::make_shared<bool>(false);
+
+    auto* task = new PromiseTask(
+        env,
+        [base, initializers, mapped, pid, libraryPath]() {
+            *mapped = InjectLibraryManual(pid, libraryPath, base.get(), initializers.get());
+        },
+        [base, initializers, mapped](Napi::Env scope) -> Napi::Value {
+            Napi::Object result = Napi::Object::New(scope);
+            result.Set("success", Napi::Boolean::New(scope, *mapped));
+            result.Set("injected", Napi::Boolean::New(scope, *mapped));
+            result.Set("method", Napi::String::New(scope, "manualElfMap"));
+            result.Set("base", Napi::Number::New(scope, static_cast<double>(*base)));
+            result.Set("initializers", Napi::Number::New(scope, static_cast<double>(*initializers)));
+            result.Set("error", Napi::String::New(scope, g_lastError));
+            return result;
+        });
+
+    return StartTask(env, task);
+}
+
 static Napi::Object InitializeModule(Napi::Env env, Napi::Object exports) {
     exports.Set("getAllMainProcessAsync", Napi::Function::New(env, ListMainProcesses));
     exports.Set("getFileHoldersAsync", Napi::Function::New(env, ListFileHolders));
     exports.Set("loadModuleManualAsync", Napi::Function::New(env, LoadModule));
+    exports.Set("loadModuleElfMapAsync", Napi::Function::New(env, LoadModuleManual));
     exports.Set("unloadModuleManualAsync", Napi::Function::New(env, UnloadModule));
     exports.Set("callRemoteSymbolAsync", Napi::Function::New(env, CallSymbol));
     exports.Set("describeBackend", Napi::Function::New(env, DescribeBackend));
