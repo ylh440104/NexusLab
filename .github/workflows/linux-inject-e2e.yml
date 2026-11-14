@@ -49,14 +49,30 @@ jobs:
           cd /opt/QQ
           DISPLAY=:99 nohup ./qq --no-sandbox >/tmp/qq.log 2>&1 &
           sleep 35
-          pgrep -af /opt/QQ/qq | grep -v zygote | grep -v type= | head -5
-          pgrep -c -f /opt/QQ/qq || true
+          echo "=== all qq ps ==="
+          ps -eo pid,ppid,comm,args | grep -i qq | grep -v grep | head -10
+          echo "=== pgrep variants ==="
+          pgrep -c -f QQ || echo none
+          echo "=== /proc scan ==="
+          for d in /proc/[0-9]*; do
+            c=$(cat $d/comm 2>/dev/null)
+            case "$c" in *qq*|*QQ*) echo "${d#/proc/} comm=$c";; esac
+          done | head -10
 
       - name: Inject
         run: |
-          MAIN=$(pgrep -af /opt/QQ/qq | grep -v zygote | grep -v 'type=' | head -1 | awk '{print $1}')
+          MAIN=""
+          for d in /proc/[0-9]*; do
+            p=${d#/proc/}
+            c=$(cat $d/comm 2>/dev/null)
+            a=$(tr '\0' ' ' < $d/cmdline 2>/dev/null)
+            case "$a" in *zygote*|*--type=*) continue;; esac
+            case "$c$a" in *qq*|*QQ*) MAIN=$p; break;; esac
+          done
           echo "main_pid=$MAIN"
           if [ -z "$MAIN" ]; then tail -20 /tmp/qq.log; exit 1; fi
+          echo "=== identify ==="
+          cat /proc/$MAIN/comm; tr '\0' ' ' < /proc/$MAIN/cmdline; echo
           grep -c nexuslab /proc/$MAIN/maps || echo 'before=0'
           /tmp/injector $MAIN /tmp/nexuslab-hook.so 2>&1 | head -30 || true
           sleep 3
