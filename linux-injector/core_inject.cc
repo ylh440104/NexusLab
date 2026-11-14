@@ -360,23 +360,29 @@ unsigned long long EnsureCodeSlot(pid_t pid) {
         return g_codeSlot;
     }
 
+#if !defined(__aarch64__)
+    /*
+     * On x86_64 a freshly mapped rwx page cannot host the int3-based
+     * trampoline: the kernel delivers the resulting breakpoint as SIGSEGV
+     * because the signal frame cannot be built on the substitute stack.
+     * Parking the bytes at libc's own ELF entry point (normally _start)
+     * keeps them inside an already executable code page, which is what
+     * kubo/injector does as well.
+     */
+    const unsigned long long libcBase = FindModuleBase(pid, "libc.so.6");
+    if (libcBase != 0) {
+        const unsigned long long entry = libcBase + EntryPointOf(pid, libcBase);
+        if (entry != 0 && MakeWritable(pid, entry, 0x40)) {
+            g_codeSlot = entry;
+            return g_codeSlot;
+        }
+    }
+#endif
+
     unsigned long long mapping = 0;
     if (!RemoteMapMemory(pid, 0x2000, 7, 0x22, &mapping)) {
         return 0;
     }
-
-    unsigned long long protResult = 0;
-#if defined(__aarch64__)
-    constexpr unsigned long long kMprotectNr = 226;
-#else
-    constexpr unsigned long long kMprotectNr = 10;
-#endif
-    const std::vector<unsigned long long> protArgs = {mapping, 0x2000, 7};
-    if (CallRemoteSyscall(pid, kMprotectNr, protArgs, &protResult) && protResult != 0) {
-        g_lastError = "mprotect(rwx) failed for code slot " + ToHex(mapping);
-        return 0;
-    }
-
     g_codeSlot = mapping + 0x100;
     return g_codeSlot;
 }
