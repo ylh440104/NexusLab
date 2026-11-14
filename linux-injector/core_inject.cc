@@ -19,6 +19,11 @@ namespace nexuslab_linux {
 
 namespace {
 
+#if defined(__aarch64__)
+constexpr size_t kIndirectCallRegister = 6;
+#else
+constexpr size_t kIndirectCallRegister = 3;
+#endif
 constexpr size_t kMaxArguments = 6;
 #if defined(__aarch64__)
 constexpr unsigned int kTrapInstruction = 0xD4200000U;
@@ -50,6 +55,9 @@ unsigned long long& ReturnValue(RemoteRegisters& registers) {
 
 unsigned long long& ArgumentRegister(RemoteRegisters& registers, size_t index) {
     return registers.gpr[index];
+}
+unsigned long long& IndirectTarget(RemoteRegisters& registers) {
+    return registers.gpr[kIndirectCallRegister];
 }
 unsigned long long& SyscallNumber(RemoteRegisters& registers) {
     return registers.gpr[8];
@@ -110,8 +118,11 @@ unsigned long long& ArgumentRegister(RemoteRegisters& registers, size_t index) {
     }
 }
 
+unsigned long long& IndirectTarget(RemoteRegisters& registers) {
+    return registers.native.rbx;
+}
 unsigned long long& SyscallNumber(RemoteRegisters& registers) {
-    return registers.native.orig_rax;
+    return registers.native.rax;
 }
 
 unsigned long long& LinkRegister(RemoteRegisters& registers) {
@@ -242,7 +253,6 @@ unsigned long long AllocateScratchStack(pid_t pid, unsigned long long nearAddres
 
 namespace {
 
-constexpr size_t kIndirectCallRegister = 6;
 constexpr unsigned int kBreakInstruction = 0xD4200000U;
 constexpr unsigned long long kRemoteStackSize = 2ULL * 1024 * 1024;
 
@@ -406,7 +416,7 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
 #if defined(__aarch64__)
     const unsigned int trampoline[2] = {0xD63F00C0U, kBreakInstruction};
 #else
-    const unsigned int trampoline[2] = {0xCCCCCCCCU, 0xCCCCCCCCU};
+    const unsigned char trampoline[3] = {0xFF, 0xD3, 0xCC};
 #endif
 
     if (!WriteProcessMemory(pid, codeAddress, trampoline, sizeof(trampoline))) {
@@ -421,11 +431,9 @@ bool CallRemoteFunction(pid_t pid, unsigned long long address,
 
     ProgramCounter(working) = codeAddress;
     StackPointer(working) = stackTop - 16;
+    IndirectTarget(working) = address;
 #if defined(__aarch64__)
-    ArgumentRegister(working, kIndirectCallRegister) = address;
     LinkRegister(working) = codeAddress;
-#else
-    ArgumentRegister(working, kIndirectCallRegister) = address;
 #endif
 
     if (!WriteRegisters(pid, working)) {
