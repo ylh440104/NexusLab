@@ -1,0 +1,72 @@
+name: Linux Inject E2E
+
+on:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential xvfb libnss3 libnspr4 libnotify4 libxtst6 libxss1 libgtk-3-0 libasound2t64 libgbm1 xdg-utils libsecret-1-0
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+          echo "ptrace_scope=$(cat /proc/sys/kernel/yama/ptrace_scope)"
+
+      - name: Build hook so
+        run: |
+          g++ -shared -fPIC -O2 -std=c++17 -o /tmp/nexuslab-hook.so linux-hook-so/hook.cc -lpthread
+          ls -la /tmp/nexuslab-hook.so
+          nm -D --defined-only /tmp/nexuslab-hook.so | grep nexuslab
+
+      - name: Build injector
+        run: |
+          g++ -std=c++17 -O2 -o /tmp/injector linux-injector/injector.cc -ldl -lpthread
+          ls -la /tmp/injector
+
+      - name: Verify ctor
+        run: |
+          printf '#include <dlfcn.h>\n#include <stdio.h>\n#include <unistd.h>\n#include <stdlib.h>\nint main(void){\n void* h=dlopen("/tmp/nexuslab-hook.so",RTLD_NOW);\n if(!h){printf("dlopen fail: %%s\\n",dlerror());return 1;}\n const char* (*cs)(void)=(const char*(*)(void))dlsym(h,"nexuslab_linux_hook_control_socket");\n int (*ld)(void)=(int(*)(void))dlsym(h,"nexuslab_linux_hook_is_loaded");\n printf("is_loaded=%%d\\n",ld());\n printf("control_sock=[%%s]\\n",cs());\n fflush(stdout);\n sleep(2);\n system("ls -la /tmp/nexuslab/ 2>/dev/null | grep sock");\n return 0;\n}\n' > /tmp/ctor.c
+          gcc -o /tmp/ctor /tmp/ctor.c -ldl
+          /tmp/ctor
+
+      - name: Download QQ
+        run: |
+          curl -sL -o /tmp/QQ.deb 'https://github.com/a1515333102/QQ-Releases/releases/download/9.9.37%2B3.2.35/QQ_3.2.35_261103_amd64_01.deb'
+          ls -la /tmp/QQ.deb
+          sudo dpkg -i /tmp/QQ.deb || true
+          sudo apt-get install -f -y -qq || true
+          ls -la /opt/QQ/qq
+
+      - name: Start QQ
+        run: |
+          Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
+          sleep 2
+          cd /opt/QQ
+          DISPLAY=:99 nohup ./qq --no-sandbox >/tmp/qq.log 2>&1 &
+          sleep 35
+          pgrep -af /opt/QQ/qq | grep -v zygote | grep -v type= | head -5
+          pgrep -c -f /opt/QQ/qq || true
+
+      - name: Inject
+        run: |
+          MAIN=$(pgrep -af /opt/QQ/qq | grep -v zygote | grep -v 'type=' | head -1 | awk '{print $1}')
+          echo "main_pid=$MAIN"
+          if [ -z "$MAIN" ]; then tail -20 /tmp/qq.log; exit 1; fi
+          grep -c nexuslab /proc/$MAIN/maps || echo 'before=0'
+          /tmp/injector $MAIN /tmp/nexuslab-hook.so 2>&1 | head -30 || true
+          sleep 3
+          echo '=== maps ==='
+          grep nexuslab /proc/$MAIN/maps || echo 'NO_MAPS'
+          echo '=== sockets ==='
+          ls -la /tmp/nexuslab/ 2>/dev/null || echo 'NO_RUNTIME_DIR'
+          ls /proc/$MAIN/maps >/dev/null 2>&1 && echo ALIVE || echo DEAD
+
+      - name: Logs
+        if: always()
+        run: |
+          tail -30 /tmp/qq.log 2>/dev/null || true
