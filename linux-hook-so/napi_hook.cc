@@ -216,46 +216,8 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                            const napi_property_descriptor* descriptors) {
     LogLine("[napi-hook] define_properties called count=%zu descriptors=%p",
             count, reinterpret_cast<const void*>(descriptors));
-    if (descriptors != nullptr && count >= 10 && count < 512) {
-        for (size_t i = 0; i < count && i < 90; ++i) {
-            char nameBuffer[160];
-            nameBuffer[0] = 0;
-            const char* probe = descriptors[i].utf8name;
-            if (probe != nullptr && reinterpret_cast<uintptr_t>(probe) > 0x10000) {
-                std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", probe);
-            }
-            if (nameBuffer[0] == 0) {
-                continue;
-            }
-            LogLine("[napi-hook]   name[%zu]=%s method=%p", i, nameBuffer,
-                    reinterpret_cast<void*>(descriptors[i].method));
-        }
-    }
     if (g_origDefineProperties == nullptr) {
         return 1;
-    }
-    if (descriptors != nullptr && count > 0 && count < 512) {
-        const uintptr_t base = reinterpret_cast<uintptr_t>(descriptors);
-        if (base > 0x10000) {
-        for (size_t i = 0; i < count; ++i) {
-            const char* name = descriptors[i].utf8name;
-            if (name == nullptr || reinterpret_cast<uintptr_t>(name) < 0x10000) {
-                continue;
-            }
-            const size_t length = std::strlen(name);
-            if (!IsInterestingName(name, length)) {
-                continue;
-            }
-            std::lock_guard<std::mutex> guard(g_nameMutex);
-            CapturedTarget target;
-            target.name.assign(name, length);
-            target.original = descriptors[i].method;
-            g_captured.push_back(target);
-            g_hookedCount.fetch_add(1);
-            LogLine("[napi-hook] define_properties captured %s method=%p",
-                    name, reinterpret_cast<void*>(descriptors[i].method));
-            }
-        }
     }
     return g_origDefineProperties(env, object, count, descriptors);
 }
