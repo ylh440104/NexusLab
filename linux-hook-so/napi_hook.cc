@@ -1024,7 +1024,14 @@ extern "C" int nexuslab_napi_bridge_post(uint32_t requestId, const char* cmd, co
     if (body != nullptr && bodyLen > 0) {
         req->body.assign(static_cast<const char*>(body), bodyLen);
     }
-    if (g_api.callThreadsafe(tsfn, req, 0) != 0) {
+    if (g_api.callThreadsafe == nullptr) {
+        LogLine("[bridge] callThreadsafe api missing");
+        delete req;
+        return 0;
+    }
+    const int callRc = g_api.callThreadsafe(tsfn, req, 0);
+    LogLine("[bridge] callThreadsafe rc=%d", callRc);
+    if (callRc != 0) {
         delete req;
         return 0;
     }
