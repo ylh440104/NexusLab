@@ -223,13 +223,6 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
             const char* probe = descriptors[i].utf8name;
             if (probe != nullptr && reinterpret_cast<uintptr_t>(probe) > 0x10000) {
                 std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", probe);
-            } else if (descriptors[i].name != nullptr && g_api.getValueStringUtf8 != nullptr && env != nullptr) {
-                size_t copied = 0;
-                if (g_api.getValueStringUtf8(env, descriptors[i].name, nameBuffer,
-                                            sizeof(nameBuffer) - 1, &copied) != 0) {
-                    nameBuffer[0] = 0;
-                }
-                nameBuffer[sizeof(nameBuffer) - 1] = 0;
             }
             if (nameBuffer[0] == 0) {
                 continue;
