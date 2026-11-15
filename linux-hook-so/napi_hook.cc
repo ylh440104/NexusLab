@@ -57,6 +57,20 @@ typedef int (*IsTypedarrayFn)(napi_env, napi_value, bool*);
 
 typedef void (*ThrowErrorFn)(napi_env, const char*, const char*);
 typedef napi_value (*GetUndefinedFn)(napi_env);
+typedef struct {
+    const char* utf8name;
+    napi_value name;
+    napi_callback method;
+    napi_callback getter;
+    napi_callback setter;
+    int attributes;
+    void* data;
+} napi_property_descriptor;
+
+typedef int (*DefinePropertiesFn)(napi_env, napi_value, size_t, const napi_property_descriptor*);
+typedef napi_value (*GetGlobalFn)(napi_env, napi_value*);
+typedef napi_value (*GetUndefinedValueFn)(napi_env);
+
 typedef int (*OpenHandleScopeFn)(napi_env, napi_handle_scope*);
 typedef int (*CloseHandleScopeFn)(napi_env, napi_handle_scope);
 
@@ -83,6 +97,7 @@ struct NapiApi {
     IsTypedarrayFn isTypedarray = nullptr;
     GetTypedarrayInfoFn getTypedarrayInfo = nullptr;
     ThrowErrorFn throwError = nullptr;
+    DefinePropertiesFn defineProperties = nullptr;
     OpenHandleScopeFn openHandleScope = nullptr;
     CloseHandleScopeFn closeHandleScope = nullptr;
 };
@@ -133,6 +148,7 @@ bool LoadNapiApi() {
     NEXUS_BIND(isTypedarray, "napi_is_typedarray")
     NEXUS_BIND(getTypedarrayInfo, "napi_get_typedarray_info")
     NEXUS_BIND(throwError, "napi_throw_error")
+    NEXUS_BIND(defineProperties, "napi_define_properties")
     NEXUS_BIND(openHandleScope, "napi_open_handle_scope")
     NEXUS_BIND(closeHandleScope, "napi_close_handle_scope")
 
@@ -190,6 +206,40 @@ void LogLine(const char* format, ...) {
     }
 }
 
+DefinePropertiesFn g_origDefineProperties = nullptr;
+
+napi_value CaptureReplacement(napi_env env, napi_callback_info info) {
+    return nullptr;
+}
+
+int HookedDefineProperties(napi_env env, napi_value object, size_t count,
+                           const napi_property_descriptor* descriptors) {
+    if (g_origDefineProperties == nullptr) {
+        return 1;
+    }
+    if (descriptors != nullptr && count > 0) {
+        for (size_t i = 0; i < count; ++i) {
+            const char* name = descriptors[i].utf8name;
+            if (name == nullptr) {
+                continue;
+            }
+            const size_t length = std::strlen(name);
+            if (!IsInterestingName(name, length)) {
+                continue;
+            }
+            std::lock_guard<std::mutex> guard(g_nameMutex);
+            CapturedTarget target;
+            target.name.assign(name, length);
+            target.original = descriptors[i].method;
+            g_captured.push_back(target);
+            g_hookedCount.fetch_add(1);
+            LogLine("[napi-hook] define_properties captured %s method=%p",
+                    name, reinterpret_cast<void*>(descriptors[i].method));
+        }
+    }
+    return g_origDefineProperties(env, object, count, descriptors);
+}
+
 napi_value HookedCreateFunction(napi_env env, const char* utf8name, size_t length,
                                 napi_callback callback, void* data, napi_value* result) {
     if (g_origCreateFunction == nullptr) {
@@ -227,6 +277,18 @@ void InstallNapiHooks() {
     }
     g_origCreateFunction = reinterpret_cast<CreateFunctionFn>(trampoline);
     LogLine("[napi-hook] napi_create_function hooked; trampoline=%p", trampoline);
+
+    if (g_api.defineProperties != nullptr) {
+        void* propsTrampoline = nullptr;
+        if (nexuslab_inline::Install(reinterpret_cast<void*>(g_api.defineProperties),
+                                     reinterpret_cast<void*>(&HookedDefineProperties),
+                                     &propsTrampoline)) {
+            g_origDefineProperties = reinterpret_cast<DefinePropertiesFn>(propsTrampoline);
+            LogLine("[napi-hook] napi_define_properties hooked; trampoline=%p", propsTrampoline);
+        } else {
+            LogLine("[napi-hook] inline hook on napi_define_properties FAILED");
+        }
+    }
 }
 
 void ShutdownNapiHooks() {
