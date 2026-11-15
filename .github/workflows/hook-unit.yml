@@ -1,0 +1,60 @@
+name: Hook Unit Test (mock napi)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'hook-test/**'
+      - 'linux-hook-so/**'
+      - '.github/workflows/hook-unit.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build mock addon
+        run: |
+          cd hook-test
+          npm install --no-save node-api-headers node-gyp
+          npx node-gyp configure build
+          ls -la build/Release/
+
+      - name: Baseline (no hook)
+        run: |
+          cd hook-test
+          cp build/Release/mock_addon.node .
+          echo '=== 基线：不带 hook ==='
+          node test.js
+
+      - name: Build hook library
+        run: |
+          cd linux-hook-so
+          g++ -shared -fPIC -O2 -std=c++17 -pthread \
+            -o /tmp/nexuslab-hook.so \
+            hook.cc napi_hook.cc inline_hook.cc
+          ls -la /tmp/nexuslab-hook.so
+
+      - name: Hooked run (LD_PRELOAD)
+        run: |
+          cd hook-test
+          rm -f /tmp/nexuslab-napi-hook.log
+          echo '=== 带 hook：LD_PRELOAD ==='
+          LD_PRELOAD=/tmp/nexuslab-hook.so node test.js || echo "EXIT=$?"
+          echo
+          echo '=== hook 日志 ==='
+          cat /tmp/nexuslab-napi-hook.log 2>/dev/null || echo '(no log)'
+          echo
+          echo '=== 验证：proxy 是否被触发 ==='
+          if grep -q 'proxy' /tmp/nexuslab-napi-hook.log 2>/dev/null; then
+            echo 'PROXY_TRIGGERED'
+          else
+            echo 'PROXY_NOT_TRIGGERED'
+          fi
+          echo '=== 验证：captured ==='
+          grep -c 'captured' /tmp/nexuslab-napi-hook.log 2>/dev/null || echo 0
