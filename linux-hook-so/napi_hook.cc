@@ -52,7 +52,7 @@ typedef int (*CreateBufferFn)(napi_env, void*, size_t, napi_value*, void**);
 typedef int (*CreateArraybufferFn)(napi_env, size_t, void**, napi_value*);
 typedef int (*GetArraybufferInfoFn)(napi_env, napi_value, void**, size_t*);
 
-typedef int (*GetTypedarrayInfoFn)(napi_env, napi_typedarray_type, napi_value, size_t*, void**, void**, size_t*);
+typedef int (*GetTypedarrayInfoFn)(napi_env, int, napi_value, size_t*, void**, void**, size_t*);
 typedef int (*IsTypedarrayFn)(napi_env, napi_value, bool*);
 
 typedef void (*ThrowErrorFn)(napi_env, const char*, const char*);
@@ -210,7 +210,7 @@ napi_value HookedCreateFunction(napi_env env, const char* utf8name, size_t lengt
 }
 
 }  // namespace
-}  // namespace nexuslab_napi
+
 void InstallNapiHooks() {
     if (!LoadNapiApi()) {
         LogLine("[napi-hook] LoadNapiApi failed");
@@ -237,4 +237,4 @@ int HookedFunctionCount() {
     return g_hookedCount.load();
 }
 
-
+}  // namespace nexuslab_napi
