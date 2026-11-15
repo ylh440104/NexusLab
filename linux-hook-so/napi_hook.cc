@@ -215,6 +215,8 @@ napi_value CaptureReplacement(napi_env env, napi_callback_info info) {
 
 constexpr int kMaxCaptureSlots = 512;
 
+
+
 struct CaptureSlot {
     napi_callback original;
     void* userData;
@@ -235,27 +237,94 @@ CaptureSlot* FindSlotByOriginal(void* original) {
     return nullptr;
 }
 
-napi_value ProxyDispatch(napi_env env, napi_callback_info info) {
-    void* data = nullptr;
-    if (g_api.getCbInfo != nullptr) {
-        g_api.getCbInfo(env, info, nullptr, nullptr, nullptr, &data);
-    }
-    napi_callback original = reinterpret_cast<napi_callback>(data);
-    if (original == nullptr) {
-        LogLine("[proxy] missing original");
+napi_value ProxyDispatchBySlot(int slotIndex, napi_env env, napi_callback_info info) {
+    if (slotIndex < 0 || slotIndex >= kMaxCaptureSlots) {
         return nullptr;
     }
-    CaptureSlot* slot = FindSlotByOriginal(data);
-    if (slot != nullptr) {
-        slot->calls.fetch_add(1);
-        LogLine("[proxy] slot#%d batch=%s idx=%zu fn=%p calls=%d",
-                static_cast<int>(slot - g_captureTable), slot->batchFirst,
-                slot->index, data, slot->calls.load());
-    } else {
-        LogLine("[proxy] unknown fn=%p", data);
+    CaptureSlot& slot = g_captureTable[slotIndex];
+    napi_callback original = slot.original;
+    if (original == nullptr) {
+        return nullptr;
     }
+    slot.calls.fetch_add(1);
+    LogLine("[proxy] slot#%d batch=%s idx=%zu fn=%p calls=%d",
+            slotIndex, slot.batchFirst, slot.index,
+            reinterpret_cast<void*>(original), slot.calls.load());
     return original(env, info);
 }
+
+template <int N>
+napi_value ProxyDispatchN(napi_env env, napi_callback_info info) {
+    return ProxyDispatchBySlot(N, env, info);
+}
+
+const napi_callback kProxyTable[64] = {
+    ProxyDispatchN<0>,
+    ProxyDispatchN<1>,
+    ProxyDispatchN<2>,
+    ProxyDispatchN<3>,
+    ProxyDispatchN<4>,
+    ProxyDispatchN<5>,
+    ProxyDispatchN<6>,
+    ProxyDispatchN<7>,
+    ProxyDispatchN<8>,
+    ProxyDispatchN<9>,
+    ProxyDispatchN<10>,
+    ProxyDispatchN<11>,
+    ProxyDispatchN<12>,
+    ProxyDispatchN<13>,
+    ProxyDispatchN<14>,
+    ProxyDispatchN<15>,
+    ProxyDispatchN<16>,
+    ProxyDispatchN<17>,
+    ProxyDispatchN<18>,
+    ProxyDispatchN<19>,
+    ProxyDispatchN<20>,
+    ProxyDispatchN<21>,
+    ProxyDispatchN<22>,
+    ProxyDispatchN<23>,
+    ProxyDispatchN<24>,
+    ProxyDispatchN<25>,
+    ProxyDispatchN<26>,
+    ProxyDispatchN<27>,
+    ProxyDispatchN<28>,
+    ProxyDispatchN<29>,
+    ProxyDispatchN<30>,
+    ProxyDispatchN<31>,
+    ProxyDispatchN<32>,
+    ProxyDispatchN<33>,
+    ProxyDispatchN<34>,
+    ProxyDispatchN<35>,
+    ProxyDispatchN<36>,
+    ProxyDispatchN<37>,
+    ProxyDispatchN<38>,
+    ProxyDispatchN<39>,
+    ProxyDispatchN<40>,
+    ProxyDispatchN<41>,
+    ProxyDispatchN<42>,
+    ProxyDispatchN<43>,
+    ProxyDispatchN<44>,
+    ProxyDispatchN<45>,
+    ProxyDispatchN<46>,
+    ProxyDispatchN<47>,
+    ProxyDispatchN<48>,
+    ProxyDispatchN<49>,
+    ProxyDispatchN<50>,
+    ProxyDispatchN<51>,
+    ProxyDispatchN<52>,
+    ProxyDispatchN<53>,
+    ProxyDispatchN<54>,
+    ProxyDispatchN<55>,
+    ProxyDispatchN<56>,
+    ProxyDispatchN<57>,
+    ProxyDispatchN<58>,
+    ProxyDispatchN<59>,
+    ProxyDispatchN<60>,
+    ProxyDispatchN<61>,
+    ProxyDispatchN<62>,
+    ProxyDispatchN<63>
+};
+
 
 int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                            const napi_property_descriptor* descriptors) {
@@ -277,6 +346,7 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                 slot.userData = writable[i].data;
                 slot.batchFirst = (first != nullptr && reinterpret_cast<uintptr_t>(first) > 0x10000) ? first : "";
                 slot.index = i;
+                writable[i].method = kProxyTable[g_captureSlots.load()];
                 g_captureSlots.fetch_add(1);
             }
             LogLine("[napi-hook] captured %d proxies so far", g_captureSlots.load());

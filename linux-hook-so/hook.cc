@@ -4,6 +4,9 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <deque>
+#include <condition_variable>
+#include <chrono>
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -215,6 +218,46 @@ unsigned long long MonotonicMs() {
            static_cast<unsigned long long>(ts.tv_nsec) / 1000000ull;
 }
 
+
+struct SendRequest {
+    std::string cmd;
+    std::string body;
+    uint32_t requestId;
+    uint32_t flags;
+};
+
+std::mutex g_sendMutex;
+std::condition_variable g_sendCv;
+std::deque<SendRequest> g_sendQueue;
+std::atomic<bool> g_senderReady{false};
+
+bool PostSendRequest(const SendRequest& req) {
+    {
+        std::lock_guard<std::mutex> guard(g_sendMutex);
+        if (g_sendQueue.size() >= 64) {
+            return false;
+        }
+        g_sendQueue.push_back(req);
+    }
+    g_sendCv.notify_one();
+    return true;
+}
+
+bool TakeSendRequest(SendRequest* out, int timeoutMs) {
+    std::unique_lock<std::mutex> lock(g_sendMutex);
+    if (!g_sendCv.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                            []() { return !g_sendQueue.empty() || g_stopping.load(); })) {
+        return false;
+    }
+    if (g_sendQueue.empty()) {
+        return false;
+    }
+    *out = g_sendQueue.front();
+    g_sendQueue.pop_front();
+    return true;
+}
+
+
 void ControlSession(int fd) {
     SendHello(fd, g_controlPath, static_cast<uint32_t>(::getpid()));
     unsigned long long lastPush = 0;
@@ -251,6 +294,32 @@ void ControlSession(int fd) {
         }
         if (op == 7) {
             ReplyLoginState(fd, requestId);
+            continue;
+        }
+        if (op == 2) {
+            const uint8_t* cmdPtr = rest.data();
+            const uint8_t* msgPtr = cmdPtr + cmdLen;
+            const uint8_t* bodyPtr = msgPtr + msgLen;
+            SendRequest req;
+            req.cmd.assign(reinterpret_cast<const char*>(cmdPtr), cmdLen);
+            req.body.assign(reinterpret_cast<const char*>(bodyPtr), bodyLen);
+            req.requestId = requestId;
+            uint32_t flags = 0;
+            std::memcpy(&flags, head + 16, 4);
+            req.flags = flags;
+            std::fputs("[hook] send request", stderr);
+            std::fputc(32, stderr);
+            std::fwrite(req.cmd.data(), 1, req.cmd.size(), stderr);
+            std::fputc(10, stderr);
+            if (PostSendRequest(req)) {
+                uint8_t ack[kHeaderSize];
+                BuildHeader(ack, 3, 0, 0, requestId, 0, 0, 0, 0);
+                if (!WriteAll(fd, ack, kHeaderSize)) break;
+            } else {
+                uint8_t err[kHeaderSize];
+                BuildHeader(err, 5, -7, 0, requestId, 0, 0, 0, 0);
+                if (!WriteAll(fd, err, kHeaderSize)) break;
+            }
             continue;
         }
         uint8_t out[kHeaderSize + 64];
