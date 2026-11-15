@@ -368,8 +368,31 @@ const char* nexuslab_linux_hook_recv_socket() {
 
 }
 
+bool IsElectronChildProcess() {
+    int fd = ::open("/proc/self/cmdline", O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+    char buffer[4096];
+    const ssize_t length = ::read(fd, buffer, sizeof(buffer) - 1);
+    ::close(fd);
+    if (length <= 0) {
+        return false;
+    }
+    buffer[length] = 0;
+    for (ssize_t i = 0; i < length; ++i) {
+        if (buffer[i] == 0) {
+            buffer[i] = ' ';
+        }
+    }
+    return std::strstr(buffer, "--type=") != nullptr;
+}
+
 __attribute__((constructor, used, visibility("default"))) void nexuslab_auto_start() {
     if (g_loaded.load()) {
+        return;
+    }
+    if (IsElectronChildProcess()) {
         return;
     }
     nexuslab_napi::InstallNapiHooks();

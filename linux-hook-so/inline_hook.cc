@@ -6,6 +6,7 @@
 #include <vector>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 namespace nexuslab_inline {
 namespace {
@@ -142,6 +143,22 @@ bool Install(void* target, void* replacement, void** trampolineOut) {
     while (required < kAbsJumpSize) {
         const size_t length = InstructionLength(code + cursor);
         if (length == 0 || length > 15) {
+            char dump[128];
+            const int written = std::snprintf(dump, sizeof(dump),
+                "[inline] decode failed at +%zu, bytes:",
+                cursor);
+            const int fd = ::open("/tmp/nexuslab-napi-hook.log", O_CREAT | O_WRONLY | O_APPEND, 0644);
+            if (fd >= 0) {
+                ::write(fd, dump, static_cast<size_t>(written));
+                for (size_t i = 0; i < 16; ++i) {
+                    char byteText[8];
+                    const int n = std::snprintf(byteText, sizeof(byteText), " %02x", code[cursor + i]);
+                    ::write(fd, byteText, static_cast<size_t>(n));
+                }
+                ::write(fd, "
+", 1);
+                ::close(fd);
+            }
             return false;
         }
         required += length;
