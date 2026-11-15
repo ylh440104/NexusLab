@@ -213,6 +213,50 @@ napi_value CaptureReplacement(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+constexpr int kMaxCaptureSlots = 160;
+
+struct CaptureSlot {
+    napi_callback original;
+    void* userData;
+    const char* batchFirst;
+    size_t index;
+    std::atomic<int> calls;
+};
+
+CaptureSlot g_captureTable[kMaxCaptureSlots];
+std::atomic<int> g_captureSlots{0};
+
+CaptureSlot* FindSlotByOriginal(void* original) {
+    for (int i = 0; i < g_captureSlots.load(); ++i) {
+        if (reinterpret_cast<void*>(g_captureTable[i].original) == original) {
+            return &g_captureTable[i];
+        }
+    }
+    return nullptr;
+}
+
+napi_value ProxyDispatch(napi_env env, napi_callback_info info) {
+    void* data = nullptr;
+    if (g_api.getCbInfo != nullptr) {
+        g_api.getCbInfo(env, info, nullptr, nullptr, nullptr, &data);
+    }
+    napi_callback original = reinterpret_cast<napi_callback>(data);
+    if (original == nullptr) {
+        LogLine("[proxy] missing original");
+        return nullptr;
+    }
+    CaptureSlot* slot = FindSlotByOriginal(data);
+    if (slot != nullptr) {
+        slot->calls.fetch_add(1);
+        LogLine("[proxy] slot#%d batch=%s idx=%zu fn=%p calls=%d",
+                static_cast<int>(slot - g_captureTable), slot->batchFirst,
+                slot->index, data, slot->calls.load());
+    } else {
+        LogLine("[proxy] unknown fn=%p", data);
+    }
+    return original(env, info);
+}
+
 int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                            const napi_property_descriptor* descriptors) {
     if (g_origDefineProperties == nullptr) {
@@ -222,6 +266,23 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
         const char* first = descriptors[0].utf8name;
         LogLine("[napi-hook] batch count=%zu first=%s",
                 count, (first != nullptr && reinterpret_cast<uintptr_t>(first) > 0x10000) ? first : "(napi_value)");
+        if (g_captureSlots.load() < kMaxCaptureSlots) {
+            napi_property_descriptor* writable = const_cast<napi_property_descriptor*>(descriptors);
+            for (size_t i = 0; i < count && g_captureSlots.load() < kMaxCaptureSlots; ++i) {
+                if (writable[i].method == nullptr) {
+                    continue;
+                }
+                CaptureSlot& slot = g_captureTable[g_captureSlots.load()];
+                slot.original = writable[i].method;
+                slot.userData = writable[i].data;
+                slot.batchFirst = (first != nullptr && reinterpret_cast<uintptr_t>(first) > 0x10000) ? first : "";
+                slot.index = i;
+                writable[i].data = reinterpret_cast<void*>(writable[i].method);
+                writable[i].method = &ProxyDispatch;
+                g_captureSlots.fetch_add(1);
+            }
+            LogLine("[napi-hook] captured %d proxies so far", g_captureSlots.load());
+        }
     }
     return g_origDefineProperties(env, object, count, descriptors);
 }
