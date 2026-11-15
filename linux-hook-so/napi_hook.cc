@@ -216,6 +216,15 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                            const napi_property_descriptor* descriptors) {
     LogLine("[napi-hook] define_properties called count=%zu descriptors=%p",
             count, reinterpret_cast<const void*>(descriptors));
+    if (descriptors != nullptr && count >= 10 && count < 512) {
+        for (size_t i = 0; i < count && i < 80; ++i) {
+            const char* probe = descriptors[i].utf8name;
+            if (probe == nullptr || reinterpret_cast<uintptr_t>(probe) < 0x10000) {
+                continue;
+            }
+            LogLine("[napi-hook]   name[%zu]=%s", i, probe);
+        }
+    }
     if (g_origDefineProperties == nullptr) {
         return 1;
     }
