@@ -295,9 +295,30 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         g_api.createBufferCopy(env, req->body.size(), req->body.data(), nullptr, &argv[1]);
     }
     size_t argc = argv[1] != nullptr ? 2 : 1;
+    napi_value target = nullptr;
+    if (g_api.getNamedProperty == nullptr) {
+        LogLine("[bridge] getNamedProperty missing");
+        delete req;
+        return;
+    }
+    const int propRc = g_api.getNamedProperty(env, exports, "SendSSORequestInternal", &target);
+    if (propRc != 0 || target == nullptr) {
+        LogLine("[bridge] target property missing rc=%d", propRc);
+        delete req;
+        return;
+    }
     napi_value result = nullptr;
-    const int rc = g_api.callFunction(env, undefined, exports, argc, argv, &result);
+    const int rc = g_api.callFunction(env, exports, target, argc, argv, &result);
     LogLine("[bridge] call rc=%d", rc);
+    if (rc == 0 && result != nullptr && g_api.getValueStringUtf8 != nullptr) {
+        char reply[512];
+        reply[0] = 0;
+        size_t copied = 0;
+        if (g_api.getValueStringUtf8(env, result, reply, sizeof(reply) - 1, &copied) == 0) {
+            LogLine("[bridge] result=%s", reply);
+            nexuslab_linux_hook_send_reply(req->requestId, 0, reply, static_cast<uint32_t>(copied));
+        }
+    }
     delete req;
 }
 constexpr int kMaxCaptureSlots = 512;
