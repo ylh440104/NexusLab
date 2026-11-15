@@ -53,7 +53,7 @@ jobs:
           cp /tmp/addon/mock_addon.node "$GITHUB_WORKSPACE/hook-test/"
           cd "$GITHUB_WORKSPACE/hook-test"
           echo '=== baseline without hook ==='
-          node test.js
+          node test.cjs
 
       - name: Build hook library
         run: |
@@ -68,7 +68,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/hook-test"
           rm -f /tmp/nexuslab-napi-hook.log
           echo '=== hooked run ==='
-          LD_PRELOAD=/tmp/nexuslab-hook.so node test.js; RC=$?
+          LD_PRELOAD=/tmp/nexuslab-hook.so node test.cjs; RC=$?
           echo "exit code: $RC"
           echo
           echo '=== hook log ==='
