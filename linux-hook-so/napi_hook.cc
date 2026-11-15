@@ -241,12 +241,9 @@ napi_value HookedCreateFunction(napi_env env, const char* utf8name, size_t lengt
 
 }  // namespace
 
-void InstallNapiHooks() {
+void InstallNapiHooksLocked() {
     if (!LoadNapiApi()) {
-        return;
-    }
-    if (::access("/tmp/nexuslab-napi-enable", F_OK) != 0) {
-        LogLine("[napi-hook] deferred: enable file missing");
+        LogLine("[napi-hook] LoadNapiApi failed");
         return;
     }
     LogLine("[napi-hook] napi api resolved; createFunction=%p",
@@ -282,4 +279,22 @@ int HookedFunctionCount() {
     return g_hookedCount.load();
 }
 
+
+void* DeferredInstallThread(void*) {
+    ::usleep(150000);
+    InstallNapiHooksLocked();
+    return nullptr;
+}
+
+void InstallNapiHooks() {
+    pthread_t thread;
+    const int rc = ::pthread_create(&thread, nullptr, DeferredInstallThread, nullptr);
+    if (rc != 0) {
+        InstallNapiHooksLocked();
+        return;
+    }
+    ::pthread_detach(thread);
+}
+
 }  // namespace nexuslab_napi
+
