@@ -344,6 +344,8 @@ int nexuslab_linux_hook_start_dynamic(const char* runtimeDir) {
     g_stopping.store(false);
     g_controlThread = std::thread(ControlLoop);
     g_recvThread = std::thread(RecvLoop);
+    g_controlThread.detach();
+    g_recvThread.detach();
     g_loaded.store(true);
     return 1;
 }
