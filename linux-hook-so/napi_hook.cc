@@ -277,8 +277,6 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                 slot.userData = writable[i].data;
                 slot.batchFirst = (first != nullptr && reinterpret_cast<uintptr_t>(first) > 0x10000) ? first : "";
                 slot.index = i;
-                writable[i].data = reinterpret_cast<void*>(writable[i].method);
-                writable[i].method = &ProxyDispatch;
                 g_captureSlots.fetch_add(1);
             }
             LogLine("[napi-hook] captured %d proxies so far", g_captureSlots.load());
