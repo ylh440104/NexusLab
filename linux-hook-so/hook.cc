@@ -8,6 +8,8 @@
 #include <mutex>
 #include <atomic>
 #include <unistd.h>
+#include <dirent.h>
+#include <ctime>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
@@ -82,13 +84,13 @@ void BuildHeader(uint8_t* out, uint16_t op, int32_t status, uint32_t flags,
     out[0] = 0x51; out[1] = 0x48; out[2] = 0x50; out[3] = 0x31;
     std::memcpy(out + 4, &kPipeVersion, 2);
     std::memcpy(out + 6, &op, 2);
-    std::memcpy(out + 8, &status, 4);
-    std::memcpy(out + 12, &flags, 4);
-    std::memcpy(out + 16, &requestId, 4);
-    std::memcpy(out + 20, &value0, 8);
-    std::memcpy(out + 28, &cmdLen, 4);
-    std::memcpy(out + 32, &bodyLen, 4);
-    std::memcpy(out + 36, &msgLen, 4);
+    std::memcpy(out + 8, &requestId, 4);
+    std::memcpy(out + 12, &status, 4);
+    std::memcpy(out + 16, &flags, 4);
+    std::memcpy(out + 20, &cmdLen, 4);
+    std::memcpy(out + 24, &msgLen, 4);
+    std::memcpy(out + 28, &bodyLen, 4);
+    std::memcpy(out + 32, &value0, 8);
 }
 
 int MakeListener(const char* path) {
@@ -121,12 +123,108 @@ bool SendHello(int fd, const char* name, uint32_t pid) {
     return WriteAll(fd, buf, kHeaderSize + std::strlen(name));
 }
 
+struct LoginSnapshot {
+    bool loggedIn;
+    unsigned long long uin;
+    char text[24];
+};
+
+LoginSnapshot DetectLoginState() {
+    LoginSnapshot snap;
+    snap.loggedIn = false;
+    snap.uin = 0;
+    snap.text[0] = 0;
+
+    const char* home = ::getenv("HOME");
+    std::string root = std::string(home && *home ? home : "/root") + "/.config/QQ/Partitions";
+    DIR* dir = ::opendir(root.c_str());
+    if (dir == nullptr) {
+        return snap;
+    }
+
+    unsigned long long bestUin = 0;
+    long long bestMtime = -1;
+    struct dirent* entry = nullptr;
+    while ((entry = ::readdir(dir)) != nullptr) {
+        const char* name = entry->d_name;
+        if (std::strncmp(name, "qqnt_", 5) != 0) {
+            continue;
+        }
+        const char* digits = name + 5;
+        size_t length = std::strlen(digits);
+        if (length < 5 || length > 12) {
+            continue;
+        }
+        bool numeric = true;
+        for (size_t i = 0; i < length; ++i) {
+            if (digits[i] < '0' || digits[i] > '9') {
+                numeric = false;
+                break;
+            }
+        }
+        if (!numeric) {
+            continue;
+        }
+        std::string full = root + "/" + name;
+        struct stat info;
+        if (::stat(full.c_str(), &info) != 0) {
+            continue;
+        }
+        if (static_cast<long long>(info.st_mtime) > bestMtime) {
+            bestMtime = static_cast<long long>(info.st_mtime);
+            bestUin = std::strtoull(digits, nullptr, 10);
+        }
+    }
+    ::closedir(dir);
+
+    if (bestUin != 0) {
+        snap.loggedIn = true;
+        snap.uin = bestUin;
+        std::snprintf(snap.text, sizeof(snap.text), "%llu", bestUin);
+    }
+    return snap;
+}
+
+void ReplyLoginState(int fd, uint32_t requestId) {
+    LoginSnapshot snap = DetectLoginState();
+    size_t textLength = snap.loggedIn ? std::strlen(snap.text) : 0;
+    uint8_t out[kHeaderSize + 32];
+    BuildHeader(out,
+                7,
+                snap.loggedIn ? 1 : 0,
+                snap.loggedIn ? 4u : 0u,
+                requestId,
+                snap.loggedIn ? snap.uin : 0,
+                0,
+                0,
+                static_cast<uint32_t>(textLength));
+    if (textLength > 0) {
+        std::memcpy(out + kHeaderSize, snap.text, textLength);
+    }
+    WriteAll(fd, out, kHeaderSize + textLength);
+}
+
+unsigned long long MonotonicMs() {
+    struct timespec ts;
+    if (::clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return static_cast<unsigned long long>(ts.tv_sec) * 1000ull +
+           static_cast<unsigned long long>(ts.tv_nsec) / 1000000ull;
+}
+
 void ControlSession(int fd) {
     SendHello(fd, g_controlPath, static_cast<uint32_t>(::getpid()));
+    unsigned long long lastPush = 0;
     while (!g_stopping.load()) {
         struct pollfd pfd = { fd, POLLIN, 0 };
         int r = ::poll(&pfd, 1, 200);
         if (r < 0 && errno == EINTR) continue;
+        const unsigned long long now = MonotonicMs();
+        if (now - lastPush >= 1500ull || lastPush == 0) {
+            ReplyLoginState(fd, 0);
+            lastPush = now;
+        }
         if (r <= 0) continue;
         uint8_t head[kHeaderSize];
         if (!ReadAll(fd, head, kHeaderSize)) break;
@@ -134,22 +232,29 @@ void ControlSession(int fd) {
         uint16_t op;
         uint32_t requestId;
         std::memcpy(&op, head + 6, 2);
-        std::memcpy(&requestId, head + 16, 4);
+        std::memcpy(&requestId, head + 8, 4);
         uint32_t cmdLen, bodyLen, msgLen;
-        std::memcpy(&cmdLen, head + 28, 4);
-        std::memcpy(&bodyLen, head + 32, 4);
-        std::memcpy(&msgLen, head + 36, 4);
+        std::memcpy(&cmdLen, head + 20, 4);
+        std::memcpy(&msgLen, head + 24, 4);
+        std::memcpy(&bodyLen, head + 28, 4);
         if (cmdLen > kMaxCmd || bodyLen > kMaxBody) {
             break;
         }
         std::vector<uint8_t> rest(static_cast<size_t>(cmdLen) + bodyLen + msgLen);
         if (!rest.empty() && !ReadAll(fd, rest.data(), rest.size())) break;
 
+        if (op == 1) {
+            if (!SendHello(fd, g_controlPath, static_cast<uint32_t>(::getpid()))) break;
+            continue;
+        }
+        if (op == 7) {
+            ReplyLoginState(fd, requestId);
+            continue;
+        }
         uint8_t out[kHeaderSize + 64];
         BuildHeader(out, 5, -2, 0, requestId, 0, 0, 0, static_cast<uint32_t>(std::strlen("unsupported pipe op")));
         std::memcpy(out + kHeaderSize, "unsupported pipe op", std::strlen("unsupported pipe op"));
         if (!WriteAll(fd, out, kHeaderSize + std::strlen("unsupported pipe op"))) break;
-        (void)op;
     }
     ::close(fd);
 }

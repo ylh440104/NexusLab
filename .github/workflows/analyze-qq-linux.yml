@@ -1,0 +1,85 @@
+name: Analyze QQ Linux Natives
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/analyze-qq-linux.yml'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq binutils file curl
+
+      - name: Discover QQ deb url
+        id: discover
+        run: |
+          set +e
+          for page in \
+            "https://im.qq.com/linuxqq/index.shtml" \
+            "https://im.qq.com/linuxqq/download.html" \
+            "https://im.qq.com/linuxqq/index.html"; do
+            echo "probing $page"
+            curl -sL --max-time 30 -A "Mozilla/5.0" "$page" -o page.html
+            grep -oE 'https://[^"'\'' ]*\.deb' page.html | sort -u | head -20
+          done > candidates.txt
+          echo "--- candidates ---"
+          cat candidates.txt
+          URL=$(grep -E 'amd64' candidates.txt | grep -Ei 'QQNT|linuxqq' | head -1)
+          if [ -z "$URL" ]; then
+            URL=$(head -1 candidates.txt)
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "selected: $URL"
+
+      - name: Download deb
+        if: steps.discover.outputs.url != ''
+        run: |
+          curl -L --max-time 600 -o qq.deb "${{ steps.discover.outputs.url }}"
+          ls -la qq.deb
+          file qq.deb
+
+      - name: Extract deb
+        if: steps.discover.outputs.url != ''
+        run: |
+          mkdir -p qqroot
+          dpkg-deb -x qq.deb qqroot || (ar x qq.deb && tar -xf data.tar.* -C qqroot)
+          echo "--- layouts ---"
+          find qqroot -maxdepth 4 -type d | head -30
+          echo "--- big natives ---"
+          find qqroot -name '*.node' -o -name '*.so' | xargs -r ls -laS 2>/dev/null | head -15
+
+      - name: Analyze symbols
+        if: steps.discover.outputs.url != ''
+        run: |
+          echo "=========== TARGET SYMBOL SEARCH ==========="
+          for f in $(find qqroot -name 'wrapper.node' -o -name 'major.node' -o -name '*.so' | head -8); do
+            echo "###### $f"
+            echo "-- file type --"
+            file "$f"
+            echo "-- sections --"
+            readelf -S "$f" 2>/dev/null | grep -E '\.symtab|\.dynsym|\.rodata' | head -5
+            echo "-- exported symbols matching QQ NT names --"
+            nm -D --defined-only "$f" 2>/dev/null | grep -iE 'SendSSO|LoginRequest|SendRequest|RecvPacket|SSORequest' | head -20
+            echo "-- all symbols matching QQ NT names --"
+            nm "$f" 2>/dev/null | grep -iE 'SendSSO|LoginRequest|SendRequest|RecvPacket|SSORequest' | head -20
+            echo "-- strings matching --"
+            strings -a "$f" 2>/dev/null | grep -E '^SendSSORequestInternal$|^LoginRequest$|^SendRequest' | head -10
+          done
+
+      - name: Upload analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qq-analysis
+          path: |
+            candidates.txt
+          retention-days: 7

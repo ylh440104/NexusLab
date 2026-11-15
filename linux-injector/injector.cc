@@ -118,10 +118,7 @@ Napi::Value ListMainProcesses(const Napi::CallbackInfo& info) {
             Napi::Array array = Napi::Array::New(scope, shared->size());
             uint32_t cursor = 0;
             for (pid_t pid : *shared) {
-                Napi::Object entry = Napi::Object::New(scope);
-                entry.Set("pid", Napi::Number::New(scope, static_cast<double>(pid)));
-                entry.Set("name", Napi::String::New(scope, "qq"));
-                array.Set(cursor++, entry);
+                array.Set(cursor++, Napi::Number::New(scope, static_cast<double>(pid)));
             }
             return array;
         });
