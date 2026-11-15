@@ -155,8 +155,7 @@ bool Install(void* target, void* replacement, void** trampolineOut) {
                     const int n = std::snprintf(byteText, sizeof(byteText), " %02x", code[cursor + i]);
                     ::write(fd, byteText, static_cast<size_t>(n));
                 }
-                ::write(fd, "
-", 1);
+                ::write(fd, "\n", 1);
                 ::close(fd);
             }
             return false;
