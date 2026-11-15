@@ -257,6 +257,10 @@ std::atomic<napi_threadsafe_function> g_sendTsfn{nullptr};
 napi_ref_t g_exportsRef = nullptr;
 std::atomic<bool> g_bridgeAlive{false};
 
+napi_value NewBridgeJsCallback(napi_env env, napi_callback_info info) {
+    return nullptr;
+}
+
 void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     SendBridgeRequest* req = static_cast<SendBridgeRequest*>(data);
     if (req == nullptr) {
@@ -872,8 +876,15 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                 g_exportsRef = ref;
                 napi_value undefined = nullptr;
                 undefined = g_api.getUndefined(env);
+                napi_value jsFn = nullptr;
+                g_api.createFunction(env, "nexuslabBridge", NAPI_AUTO_LENGTH, &NewBridgeJsCallback, nullptr, &jsFn);
                 napi_threadsafe_function tsfn = nullptr;
-                const int rc = g_api.createThreadsafe(env, undefined, nullptr, nullptr, 0, 4, nullptr, nullptr, nullptr, &BridgeCallJs, &tsfn);
+                int rc = -1;
+                if (jsFn != nullptr) {
+                    napi_value resName = nullptr;
+                    g_api.createStringUtf8(env, "nexuslab-bridge", NAPI_AUTO_LENGTH, &resName);
+                    rc = g_api.createThreadsafe(env, jsFn, resName, (napi_value)nullptr, (size_t)0, (size_t)4, (void*)nullptr, (void*)nullptr, (void*)nullptr, &BridgeCallJs, &tsfn);
+                }
                 LogLine("[bridge] tsfn create rc=%d tsfn=%p", rc, reinterpret_cast<void*>(tsfn));
                 if (rc == 0 && tsfn != nullptr) {
                     g_sendTsfn.store(tsfn);
