@@ -80,3 +80,17 @@ jobs:
           grep -q 'captured' /tmp/nexuslab-napi-hook.log 2>/dev/null \
             && echo 'CAPTURE_OK' || echo 'CAPTURE_NONE'
           exit $RC
+
+      - name: Protocol frame test (socket)
+        run: |
+          cd "$GITHUB_WORKSPACE/hook-test"
+          rm -rf /tmp/nlrt && mkdir -p /tmp/nlrt
+          export NEXUSLAB_RUNTIME_DIR=/tmp/nlrt
+          export NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt
+          export NEXUSLAB_HOOK_DELAY_MS=0
+          echo '=== protocol test ==='
+          LD_PRELOAD=/tmp/nexuslab-hook.so node protocol_test.cjs; RC=$?
+          echo "protocol exit: $RC"
+          echo '=== sockets created ==='
+          ls -la /tmp/nlrt/ 2>/dev/null || echo '(none)'
+          exit $RC
