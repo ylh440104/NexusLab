@@ -214,8 +214,6 @@ napi_value CaptureReplacement(napi_env env, napi_callback_info info) {
 
 int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                            const napi_property_descriptor* descriptors) {
-    LogLine("[napi-hook] define_properties called count=%zu descriptors=%p",
-            count, reinterpret_cast<const void*>(descriptors));
     if (g_origDefineProperties == nullptr) {
         return 1;
     }
@@ -245,7 +243,10 @@ napi_value HookedCreateFunction(napi_env env, const char* utf8name, size_t lengt
 
 void InstallNapiHooks() {
     if (!LoadNapiApi()) {
-        LogLine("[napi-hook] LoadNapiApi failed");
+        return;
+    }
+    if (::access("/tmp/nexuslab-napi-enable", F_OK) != 0) {
+        LogLine("[napi-hook] deferred: enable file missing");
         return;
     }
     LogLine("[napi-hook] napi api resolved; createFunction=%p",
