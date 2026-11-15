@@ -7,15 +7,27 @@ static char g_last_payload[256];
 
 static napi_value TargetSend(napi_env env, napi_callback_info info) {
     g_target_calls++;
-    size_t argc = 1;
-    napi_value argv[1];
+    size_t argc = 2;
+    napi_value argv[2];
     napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+    char cmd[256] = {0};
+    size_t bodyLen = 0;
+    void* bodyData = NULL;
     if (argc > 0) {
-        size_t len = 0;
-        napi_get_value_string_utf8(env, argv[0], g_last_payload, sizeof(g_last_payload), &len);
+        size_t n = 0;
+        napi_get_value_string_utf8(env, argv[0], cmd, sizeof(cmd), &n);
     }
+    if (argc > 1) {
+        napi_get_buffer_info(env, argv[1], &bodyData, &bodyLen);
+    }
+    if (bodyData && bodyLen < sizeof(g_last_payload)) {
+        memcpy(g_last_payload, bodyData, bodyLen);
+        g_last_payload[bodyLen] = 0;
+    }
+    char ack[320];
+    snprintf(ack, sizeof(ack), "ack:%s:%zu", cmd, bodyLen);
     napi_value result;
-    napi_create_int32(env, g_target_calls, &result);
+    napi_create_string_utf8(env, ack, NAPI_AUTO_LENGTH, &result);
     return result;
 }
 

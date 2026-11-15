@@ -14,6 +14,12 @@ extern "C" int nexuslab_linux_hook_start_dynamic(const char* runtimeDir);
 #include <sys/mman.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <new>
+
+extern "C" {
+int nexuslab_linux_hook_take_send(char* cmdBuf, size_t cmdCap, void* bodyBuf, size_t bodyCap, uint32_t* requestId, uint32_t* flags, size_t* bodyLenOut, int timeoutMs);
+int nexuslab_linux_hook_send_reply(uint32_t requestId, int32_t status, const void* body, uint32_t bodyLen);
+}
 #include <cstdarg>
 #include <fcntl.h>
 
@@ -29,6 +35,17 @@ typedef struct napi_handle_scope__* napi_handle_scope;
 typedef napi_value (*napi_callback)(napi_env, napi_callback_info);
 
 typedef napi_value (*CreateFunctionFn)(napi_env, const char*, size_t, napi_callback, void*, napi_value*);
+typedef struct napi_threadsafe_function__* napi_threadsafe_function;
+typedef struct napi_ref__* napi_ref_t;
+typedef void (*ThreadsafeCallJsFn)(napi_env, napi_value, void*, void*);
+typedef int (*CreateThreadsafeFn)(napi_env, napi_value, napi_value, napi_value, size_t, size_t, void*, void*, void*, ThreadsafeCallJsFn, napi_threadsafe_function*);
+typedef int (*CallThreadsafeFn)(napi_threadsafe_function, void*, int);
+typedef int (*CreateReferenceFn)(napi_env, napi_value, uint32_t, napi_ref_t*);
+typedef int (*GetReferenceValueFn)(napi_env, napi_ref_t, napi_value*);
+typedef int (*GetGlobalFnT)(napi_env, napi_value*);
+typedef int (*CallFunctionFn)(napi_env, napi_value, napi_value, size_t, const napi_value*, napi_value*);
+typedef int (*CreateBufferCopyFn)(napi_env, size_t, const void*, void**, napi_value*);
+constexpr size_t NAPI_AUTO_LENGTH = static_cast<size_t>(-1);
 typedef int (*GetCbInfoFn)(napi_env, napi_callback_info, size_t*, napi_value*, napi_value*, void**);
 typedef int (*GetValueStringUtf8Fn)(napi_env, napi_value, char*, size_t, size_t*);
 typedef int (*TypeofFn)(napi_env, napi_value, int*);
@@ -100,6 +117,14 @@ struct NapiApi {
     GetTypedarrayInfoFn getTypedarrayInfo = nullptr;
     ThrowErrorFn throwError = nullptr;
     DefinePropertiesFn defineProperties = nullptr;
+    CreateThreadsafeFn createThreadsafe = nullptr;
+    CallThreadsafeFn callThreadsafe = nullptr;
+    CreateReferenceFn createReference = nullptr;
+    GetReferenceValueFn getReferenceValue = nullptr;
+    GetGlobalFnT getGlobal = nullptr;
+    CallFunctionFn callFunction = nullptr;
+    CreateBufferCopyFn createBufferCopy = nullptr;
+    GetUndefinedFn getUndefined = nullptr;
     OpenHandleScopeFn openHandleScope = nullptr;
     CloseHandleScopeFn closeHandleScope = nullptr;
 };
@@ -151,6 +176,14 @@ bool LoadNapiApi() {
     NEXUS_BIND(getTypedarrayInfo, "napi_get_typedarray_info")
     NEXUS_BIND(throwError, "napi_throw_error")
     NEXUS_BIND(defineProperties, "napi_define_properties")
+    NEXUS_BIND(createThreadsafe, "napi_create_threadsafe_function")
+    NEXUS_BIND(callThreadsafe, "napi_call_threadsafe_function")
+    NEXUS_BIND(createReference, "napi_create_reference")
+    NEXUS_BIND(getReferenceValue, "napi_get_reference_value")
+    NEXUS_BIND(getGlobal, "napi_get_global")
+    NEXUS_BIND(callFunction, "napi_call_function")
+    NEXUS_BIND(createBufferCopy, "napi_create_buffer_copy")
+    NEXUS_BIND(getUndefined, "napi_get_undefined")
     NEXUS_BIND(openHandleScope, "napi_open_handle_scope")
     NEXUS_BIND(closeHandleScope, "napi_close_handle_scope")
 
@@ -214,6 +247,55 @@ napi_value CaptureReplacement(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+struct SendBridgeRequest {
+    uint32_t requestId;
+    char cmd[256];
+    std::string body;
+};
+
+std::atomic<napi_threadsafe_function> g_sendTsfn{nullptr};
+napi_ref_t g_exportsRef = nullptr;
+std::atomic<bool> g_bridgeAlive{false};
+
+void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
+    SendBridgeRequest* req = static_cast<SendBridgeRequest*>(data);
+    if (req == nullptr) {
+        return;
+    }
+    LogLine("[bridge] dispatch cmd=%s reqId=%u", req->cmd, req->requestId);
+    if (g_api.getReferenceValue == nullptr || g_api.callFunction == nullptr) {
+        LogLine("[bridge] api missing");
+        delete req;
+        return;
+    }
+    napi_value exports = nullptr;
+    if (g_exportsRef == nullptr || g_api.getReferenceValue(env, g_exportsRef, &exports) != 0 || exports == nullptr) {
+        LogLine("[bridge] exports ref invalid");
+        delete req;
+        return;
+    }
+    napi_value undefined = nullptr;
+    if (g_api.getUndefined != nullptr) {
+        undefined = g_api.getUndefined(env);
+    }
+    napi_value argv[2];
+    argv[0] = nullptr;
+    argv[1] = nullptr;
+    g_api.createStringUtf8(env, req->cmd, NAPI_AUTO_LENGTH, &argv[0]);
+    if (argv[0] == nullptr) {
+        LogLine("[bridge] cmd string failed");
+        delete req;
+        return;
+    }
+    if (g_api.createBufferCopy != nullptr && !req->body.empty()) {
+        g_api.createBufferCopy(env, req->body.size(), req->body.data(), nullptr, &argv[1]);
+    }
+    size_t argc = argv[1] != nullptr ? 2 : 1;
+    napi_value result = nullptr;
+    const int rc = g_api.callFunction(env, undefined, exports, argc, argv, &result);
+    LogLine("[bridge] call rc=%d", rc);
+    delete req;
+}
 constexpr int kMaxCaptureSlots = 512;
 
 
@@ -784,6 +866,23 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
         const char* first = descriptors[0].utf8name;
         LogLine("[napi-hook] batch count=%zu first=%s",
                 count, (first != nullptr && reinterpret_cast<uintptr_t>(first) > 0x10000) ? first : "(napi_value)");
+        if (g_exportsRef == nullptr && g_api.createReference != nullptr && g_api.createThreadsafe != nullptr && g_api.getUndefined != nullptr) {
+            napi_ref_t ref = nullptr;
+            if (g_api.createReference(env, object, 1, &ref) == 0 && ref != nullptr) {
+                g_exportsRef = ref;
+                napi_value undefined = nullptr;
+                undefined = g_api.getUndefined(env);
+                napi_threadsafe_function tsfn = nullptr;
+                const int rc = g_api.createThreadsafe(env, undefined, nullptr, nullptr, 0, 4, nullptr, nullptr, nullptr, &BridgeCallJs, &tsfn);
+                LogLine("[bridge] tsfn create rc=%d tsfn=%p", rc, reinterpret_cast<void*>(tsfn));
+                if (rc == 0 && tsfn != nullptr) {
+                    g_sendTsfn.store(tsfn);
+                    g_bridgeAlive.store(true);
+                }
+            } else {
+                LogLine("[bridge] reference create failed");
+            }
+        }
         if (g_captureSlots.load() < kMaxCaptureSlots) {
             napi_property_descriptor* writable = const_cast<napi_property_descriptor*>(descriptors);
             for (size_t i = 0; i < count && g_captureSlots.load() < kMaxCaptureSlots; ++i) {
@@ -895,5 +994,34 @@ void InstallNapiHooks() {
     ::pthread_detach(thread);
 }
 
-}  // namespace nexuslab_napi
 
+extern "C" int nexuslab_napi_bridge_available() {
+    return g_sendTsfn.load() != nullptr ? 1 : 0;
+}
+
+extern "C" int nexuslab_napi_bridge_post(uint32_t requestId, const char* cmd, const void* body, uint32_t bodyLen) {
+    napi_threadsafe_function tsfn = g_sendTsfn.load();
+    if (tsfn == nullptr || cmd == nullptr) {
+        return 0;
+    }
+    SendBridgeRequest* req = new(std::nothrow) SendBridgeRequest();
+    if (req == nullptr) {
+        return 0;
+    }
+    req->requestId = requestId;
+    std::snprintf(req->cmd, sizeof(req->cmd), "%s", cmd);
+    if (body != nullptr && bodyLen > 0) {
+        req->body.assign(static_cast<const char*>(body), bodyLen);
+    }
+    if (g_api.callThreadsafe(tsfn, req, 0) != 0) {
+        delete req;
+        return 0;
+    }
+    return 1;
+}
+
+extern "C" void* nexuslab_napi_get_send_tsfn() {
+    return reinterpret_cast<void*>(g_sendTsfn.load());
+}
+
+}  // namespace nexuslab_napi

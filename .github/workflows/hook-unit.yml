@@ -94,3 +94,17 @@ jobs:
           echo '=== sockets created ==='
           ls -la /tmp/nlrt/ 2>/dev/null || echo '(none)'
           exit $RC
+
+      - name: E2E bridge roundtrip
+        run: |
+          cd "$GITHUB_WORKSPACE/hook-test"
+          rm -rf /tmp/nlrt2 && mkdir -p /tmp/nlrt2
+          export NEXUSLAB_RUNTIME_DIR=/tmp/nlrt2
+          export NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt2
+          export NEXUSLAB_HOOK_DELAY_MS=0
+          echo '=== e2e bridge test ==='
+          LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs; RC=$?
+          echo "e2e exit: $RC"
+          echo '=== bridge log ==='
+          grep -E 'bridge|sender' /tmp/nexuslab-napi-hook.log 2>/dev/null | head -12 || echo '(no bridge log)'
+          exit $RC

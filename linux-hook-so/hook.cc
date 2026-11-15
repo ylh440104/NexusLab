@@ -21,6 +21,16 @@
 #include <poll.h>
 #include <errno.h>
 #include "napi_hook.h"
+extern "C" {
+int nexuslab_napi_bridge_available();
+int nexuslab_napi_bridge_post(uint32_t requestId, const char* cmd, const void* body, uint32_t bodyLen);
+}
+int nexuslab_linux_hook_send_reply(uint32_t requestId, int32_t status, const void* body, uint32_t bodyLen);
+extern "C" {
+int nexuslab_napi_bridge_available();
+int nexuslab_napi_bridge_post(uint32_t requestId, const char* cmd, const void* body, uint32_t bodyLen);
+}
+int nexuslab_linux_hook_send_reply(uint32_t requestId, int32_t status, const void* body, uint32_t bodyLen);
 
 namespace {
 
@@ -257,6 +267,26 @@ bool TakeSendRequest(SendRequest* out, int timeoutMs) {
     return true;
 }
 
+
+void SenderLoop() {
+    while (!g_stopping.load()) {
+        SendRequest req;
+        if (!TakeSendRequest(&req, 200)) {
+            continue;
+        }
+        std::fputs("[sender] got cmd=", stderr);
+        std::fwrite(req.cmd.data(), 1, req.cmd.size(), stderr);
+        std::fputc(10, stderr);
+        if (nexuslab_napi_bridge_available()) {
+            if (nexuslab_napi_bridge_post(req.requestId, req.cmd.c_str(), req.body.data(), static_cast<uint32_t>(req.body.size()))) {
+                std::fputs("[sender] posted to js thread", stderr);
+                std::fputc(10, stderr);
+                continue;
+            }
+        }
+        nexuslab_linux_hook_send_reply(req.requestId, -7, "bridge unavailable", 18);
+    }
+}
 
 void ControlSession(int fd) {
     SendHello(fd, g_controlPath, static_cast<uint32_t>(::getpid()));
