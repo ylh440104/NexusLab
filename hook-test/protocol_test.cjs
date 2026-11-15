@@ -6,9 +6,15 @@ const RUNTIME_DIR = process.env.NEXUSLAB_RUNTIME_DIR;
 const PID = process.pid;
 const CONTROL = path.join(RUNTIME_DIR, 'mojo.' + PID + '.control.sock');
 
+const LOGF = '/tmp/proto_trace.log';
+function log(msg) {
+    try { fs.appendFileSync(LOGF, msg + String.fromCharCode(10)); } catch (e) {}
+    console.log(msg);
+}
+
 let failures = 0;
 function check(name, ok, detail) {
-    console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? '  [' + detail + ']' : ''));
+    log((ok ? 'PASS  ' : 'FAIL  ') + name + (detail ? '  [' + detail + ']' : ''));
     if (!ok) failures++;
 }
 
@@ -44,8 +50,10 @@ function buildFrame(op, requestId, flags, cmd, body) {
 }
 
 async function main() {
+    log('main start');
     check('runtime dir exists', fs.existsSync(RUNTIME_DIR), RUNTIME_DIR);
 
+    log('connecting ' + CONTROL);
     const sock = net.createConnection(CONTROL);
     let connected = false;
     sock.on('connect', () => { connected = true; });
@@ -83,6 +91,7 @@ async function main() {
     console.log('--- sending op=2 send-request ---');
     const before = frames.length;
     const reqId = 777;
+    log('writing op=2');
     sock.write(buildFrame(2, reqId, 1, 'trpc.test.Service.Method',
                           Buffer.from([1, 2, 3, 4, 5])));
 

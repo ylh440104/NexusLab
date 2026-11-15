@@ -106,5 +106,5 @@ jobs:
           timeout 40 env LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs; RC=$?
           echo "e2e exit: $RC"
           echo '=== bridge log ==='
-          echo '--- bridge log ---'; grep -E 'bridge|sender' /tmp/nexuslab-napi-hook.log 2>/dev/null | tail -20; echo '--- end log ---'
+          echo '--- proto trace ---'; cat /tmp/proto_trace.log 2>/dev/null; echo '--- bridge log ---'; grep -E 'bridge|sender|proxy' /tmp/nexuslab-napi-hook.log 2>/dev/null | tail -20; echo '--- end ---'
           exit $RC
