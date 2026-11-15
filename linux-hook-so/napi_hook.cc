@@ -217,12 +217,25 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
     LogLine("[napi-hook] define_properties called count=%zu descriptors=%p",
             count, reinterpret_cast<const void*>(descriptors));
     if (descriptors != nullptr && count >= 10 && count < 512) {
-        for (size_t i = 0; i < count && i < 80; ++i) {
+        for (size_t i = 0; i < count && i < 90; ++i) {
+            char nameBuffer[160];
+            nameBuffer[0] = 0;
             const char* probe = descriptors[i].utf8name;
-            if (probe == nullptr || reinterpret_cast<uintptr_t>(probe) < 0x10000) {
+            if (probe != nullptr && reinterpret_cast<uintptr_t>(probe) > 0x10000) {
+                std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", probe);
+            } else if (descriptors[i].name != nullptr && g_api.getValueStringUtf8 != nullptr && env != nullptr) {
+                size_t copied = 0;
+                if (g_api.getValueStringUtf8(env, descriptors[i].name, nameBuffer,
+                                            sizeof(nameBuffer) - 1, &copied) != 0) {
+                    nameBuffer[0] = 0;
+                }
+                nameBuffer[sizeof(nameBuffer) - 1] = 0;
+            }
+            if (nameBuffer[0] == 0) {
                 continue;
             }
-            LogLine("[napi-hook]   name[%zu]=%s", i, probe);
+            LogLine("[napi-hook]   name[%zu]=%s method=%p", i, nameBuffer,
+                    reinterpret_cast<void*>(descriptors[i].method));
         }
     }
     if (g_origDefineProperties == nullptr) {
