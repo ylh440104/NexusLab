@@ -68,7 +68,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/hook-test"
           rm -f /tmp/nexuslab-napi-hook.log
           echo '=== hooked run (delay 0, wait window 400ms) ==='
-          NEXUSLAB_HOOK_DELAY_MS=0 HOOK_WAIT_MS=400 LD_PRELOAD=/tmp/nexuslab-hook.so node test.cjs; RC=$?
+          NEXUSLAB_HOOK_DELAY_MS=0 HOOK_WAIT_MS=400 timeout 40 env LD_PRELOAD=/tmp/nexuslab-hook.so node test.cjs; RC=$?
           echo "exit code: $RC"
           echo
           echo '=== hook log ==='
@@ -89,7 +89,7 @@ jobs:
           export NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt
           export NEXUSLAB_HOOK_DELAY_MS=0
           echo '=== protocol test ==='
-          LD_PRELOAD=/tmp/nexuslab-hook.so node protocol_test.cjs; RC=$?
+          timeout 40 env LD_PRELOAD=/tmp/nexuslab-hook.so node protocol_test.cjs; RC=$?
           echo "protocol exit: $RC"
           echo '=== sockets created ==='
           ls -la /tmp/nlrt/ 2>/dev/null || echo '(none)'
@@ -103,7 +103,7 @@ jobs:
           export NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt2
           export NEXUSLAB_HOOK_DELAY_MS=0
           echo '=== e2e bridge test ==='
-          LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs; RC=$?
+          timeout 40 env LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs; RC=$?
           echo "e2e exit: $RC"
           echo '=== bridge log ==='
           grep -E 'bridge|sender' /tmp/nexuslab-napi-hook.log 2>/dev/null | head -12 || echo '(no bridge log)'
