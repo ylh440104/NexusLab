@@ -64,6 +64,7 @@ typedef struct {
     napi_callback method;
     napi_callback getter;
     napi_callback setter;
+    napi_value value;
     int attributes;
     void* data;
 } napi_property_descriptor;
