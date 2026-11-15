@@ -39,6 +39,7 @@ typedef struct napi_threadsafe_function__* napi_threadsafe_function;
 typedef struct napi_ref__* napi_ref_t;
 typedef void (*ThreadsafeCallJsFn)(napi_env, napi_value, void*, void*);
 typedef int (*CreateThreadsafeFn)(napi_env, napi_value, napi_value, napi_value, size_t, size_t, void*, void*, void*, ThreadsafeCallJsFn, napi_threadsafe_function*);
+typedef int (*ReleaseThreadsafeFn)(napi_threadsafe_function, int);
 typedef int (*CallThreadsafeFn)(napi_threadsafe_function, void*, int);
 typedef int (*CreateReferenceFn)(napi_env, napi_value, uint32_t, napi_ref_t*);
 typedef int (*GetReferenceValueFn)(napi_env, napi_ref_t, napi_value*);
@@ -119,6 +120,7 @@ struct NapiApi {
     DefinePropertiesFn defineProperties = nullptr;
     CreateThreadsafeFn createThreadsafe = nullptr;
     CallThreadsafeFn callThreadsafe = nullptr;
+    ReleaseThreadsafeFn releaseThreadsafe = nullptr;
     CreateReferenceFn createReference = nullptr;
     GetReferenceValueFn getReferenceValue = nullptr;
     GetGlobalFnT getGlobal = nullptr;
@@ -178,6 +180,7 @@ bool LoadNapiApi() {
     NEXUS_BIND(defineProperties, "napi_define_properties")
     NEXUS_BIND(createThreadsafe, "napi_create_threadsafe_function")
     NEXUS_BIND(callThreadsafe, "napi_call_threadsafe_function")
+    NEXUS_BIND(releaseThreadsafe, "napi_release_threadsafe_function")
     NEXUS_BIND(createReference, "napi_create_reference")
     NEXUS_BIND(getReferenceValue, "napi_get_reference_value")
     NEXUS_BIND(getGlobal, "napi_get_global")
@@ -259,6 +262,13 @@ std::atomic<bool> g_bridgeAlive{false};
 
 napi_value NewBridgeJsCallback(napi_env env, napi_callback_info info) {
     return nullptr;
+}
+
+void ShutdownTsfn() {
+    napi_threadsafe_function tsfn = g_sendTsfn.exchange(nullptr);
+    if (tsfn != nullptr && g_api.releaseThreadsafe != nullptr) {
+        g_api.releaseThreadsafe(tsfn, 1);
+    }
 }
 
 void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
@@ -910,6 +920,7 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                 if (rc == 0 && tsfn != nullptr) {
                     g_sendTsfn.store(tsfn);
                     g_bridgeAlive.store(true);
+                    std::atexit(&ShutdownTsfn);
                 }
             } else {
                 LogLine("[bridge] reference create failed");

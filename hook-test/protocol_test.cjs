@@ -110,7 +110,7 @@ async function main() {
     await new Promise(r => setTimeout(r, 50));
     sock.destroy();
     console.log(failures === 0 ? 'PROTOCOL_ALL_PASS' : 'PROTOCOL_FAILURES=' + failures);
-    process.exit(failures === 0 ? 0 : 1);
+    setTimeout(() => setTimeout(() => process.exit(failures === 0 ? 0 : 1), 150), 150);
 }
 
 main().catch(e => { console.error('error:', e.message); process.exit(1); });

@@ -40,4 +40,4 @@ if (waitMs > 0) {
 }
 
 console.log(failures === 0 ? 'ALL_PASS' : 'FAILURES=' + failures);
-process.exit(failures === 0 ? 0 : 1);
+setTimeout(() => setTimeout(() => process.exit(failures === 0 ? 0 : 1), 150), 150);
