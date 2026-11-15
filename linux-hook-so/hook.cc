@@ -46,6 +46,7 @@ char g_controlPath[108] = {0};
 char g_recvPath[108] = {0};
 std::atomic<bool> g_loaded{false};
 std::atomic<bool> g_stopping{false};
+char g_bootRuntimeDir[256] = {0};
 std::thread g_controlThread;
 std::thread g_recvThread;
 
@@ -395,7 +396,8 @@ __attribute__((constructor, used, visibility("default"))) void nexuslab_auto_sta
     if (IsElectronChildProcess()) {
         return;
     }
-    nexuslab_napi::InstallNapiHooks();
     const char* dir = ::getenv("NEXUSLAB_RUNTIME_DIR");
-    nexuslab_linux_hook_start_dynamic(dir);
+    ::snprintf(g_bootRuntimeDir, sizeof(g_bootRuntimeDir), "%s",
+               (dir && *dir) ? dir : "");
+    nexuslab_napi::InstallNapiHooks();
 }

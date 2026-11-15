@@ -1,5 +1,6 @@
 #include "napi_hook.h"
 #include "inline_hook.h"
+extern "C" int nexuslab_linux_hook_start_dynamic(const char* runtimeDir);
 
 #include <cstdint>
 #include <cstdio>
@@ -283,6 +284,11 @@ int HookedFunctionCount() {
 void* DeferredInstallThread(void*) {
     ::usleep(150000);
     InstallNapiHooksLocked();
+    const char* dir = ::getenv("NEXUSLAB_RUNTIME_DIR");
+    if (dir == nullptr || *dir == 0) {
+        dir = "/run/user/0/nexuslab";
+    }
+    nexuslab_linux_hook_start_dynamic(dir);
     return nullptr;
 }
 
