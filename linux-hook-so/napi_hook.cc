@@ -213,7 +213,7 @@ napi_value CaptureReplacement(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-constexpr int kMaxCaptureSlots = 160;
+constexpr int kMaxCaptureSlots = 512;
 
 struct CaptureSlot {
     napi_callback original;
@@ -262,7 +262,7 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
     if (g_origDefineProperties == nullptr) {
         return 1;
     }
-    if (count >= 5 && count < 512 && descriptors != nullptr) {
+    if (count >= 1 && count < 512 && descriptors != nullptr) {
         const char* first = descriptors[0].utf8name;
         LogLine("[napi-hook] batch count=%zu first=%s",
                 count, (first != nullptr && reinterpret_cast<uintptr_t>(first) > 0x10000) ? first : "(napi_value)");
