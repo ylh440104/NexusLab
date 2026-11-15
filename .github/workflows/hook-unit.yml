@@ -18,23 +18,46 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Build mock addon
+      - name: Install node headers
         run: |
-          cd hook-test
-          npm install --no-save node-api-headers node-gyp
-          npx node-gyp configure build
-          ls -la build/Release/
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nodejs-dev libnode-dev 2>/dev/null || true
+          echo "NODE_INC=$(node -p "require('path').dirname(process.execPath)")/../include/node"
+          ls /usr/include/node 2>/dev/null | head -3 || echo 'no system headers'
+
+      - name: Build mock addon (direct gcc)
+        run: |
+          mkdir -p /tmp/addon
+          cd /tmp/addon
+          cp "$GITHUB_WORKSPACE/hook-test/mock_addon.c" .
+          NODE_INC=""
+          for d in /usr/include/node /usr/local/include/node \
+                   "$HOME/node/include/node"; do
+            if [ -f "$d/node_api.h" ]; then NODE_INC="$d"; break; fi
+          done
+          if [ -z "$NODE_INC" ]; then
+            echo 'fetching headers from nodejs.org'
+            curl -sSL -o /tmp/node.tar.xz \
+              "https://nodejs.org/dist/v20.18.0/node-v20.18.0-headers.tar.xz"
+            tar -xJf /tmp/node.tar.xz -C /tmp
+            NODE_INC=/tmp/node-v20.18.0/include/node
+          fi
+          echo "using headers: $NODE_INC"
+          ls "$NODE_INC/node_api.h"
+          gcc -shared -fPIC -O2 -I"$NODE_INC" \
+            -o mock_addon.node mock_addon.c
+          ls -la mock_addon.node
 
       - name: Baseline (no hook)
         run: |
-          cd hook-test
-          cp build/Release/mock_addon.node .
-          echo '=== 基线：不带 hook ==='
+          cp /tmp/addon/mock_addon.node "$GITHUB_WORKSPACE/hook-test/"
+          cd "$GITHUB_WORKSPACE/hook-test"
+          echo '=== baseline without hook ==='
           node test.js
 
       - name: Build hook library
         run: |
-          cd linux-hook-so
+          cd "$GITHUB_WORKSPACE/linux-hook-so"
           g++ -shared -fPIC -O2 -std=c++17 -pthread \
             -o /tmp/nexuslab-hook.so \
             hook.cc napi_hook.cc inline_hook.cc
@@ -42,19 +65,18 @@ jobs:
 
       - name: Hooked run (LD_PRELOAD)
         run: |
-          cd hook-test
+          cd "$GITHUB_WORKSPACE/hook-test"
           rm -f /tmp/nexuslab-napi-hook.log
-          echo '=== 带 hook：LD_PRELOAD ==='
-          LD_PRELOAD=/tmp/nexuslab-hook.so node test.js || echo "EXIT=$?"
+          echo '=== hooked run ==='
+          LD_PRELOAD=/tmp/nexuslab-hook.so node test.js; RC=$?
+          echo "exit code: $RC"
           echo
-          echo '=== hook 日志 ==='
+          echo '=== hook log ==='
           cat /tmp/nexuslab-napi-hook.log 2>/dev/null || echo '(no log)'
           echo
-          echo '=== 验证：proxy 是否被触发 ==='
-          if grep -q 'proxy' /tmp/nexuslab-napi-hook.log 2>/dev/null; then
-            echo 'PROXY_TRIGGERED'
-          else
-            echo 'PROXY_NOT_TRIGGERED'
-          fi
-          echo '=== 验证：captured ==='
-          grep -c 'captured' /tmp/nexuslab-napi-hook.log 2>/dev/null || echo 0
+          echo '=== checks ==='
+          grep -q 'proxy' /tmp/nexuslab-napi-hook.log 2>/dev/null \
+            && echo 'PROXY_TRIGGERED' || echo 'PROXY_NOT_TRIGGERED'
+          grep -q 'captured' /tmp/nexuslab-napi-hook.log 2>/dev/null \
+            && echo 'CAPTURE_OK' || echo 'CAPTURE_NONE'
+          exit $RC
