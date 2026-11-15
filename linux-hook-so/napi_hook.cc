@@ -218,6 +218,11 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
     if (g_origDefineProperties == nullptr) {
         return 1;
     }
+    if (count >= 5 && count < 512 && descriptors != nullptr) {
+        const char* first = descriptors[0].utf8name;
+        LogLine("[napi-hook] batch count=%zu first=%s",
+                count, (first != nullptr && reinterpret_cast<uintptr_t>(first) > 0x10000) ? first : "(napi_value)");
+    }
     return g_origDefineProperties(env, object, count, descriptors);
 }
 
