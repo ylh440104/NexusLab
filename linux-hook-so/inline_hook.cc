@@ -62,6 +62,8 @@ size_t InstructionLength(const unsigned char* code) {
 
     const unsigned char opcode = code[index];
 
+    if (opcode >= 0x50 && opcode <= 0x5F) return index + 1;  // push/pop reg
+    if (opcode >= 0x90 && opcode <= 0x97) return index + 1;  // xchg/nop
     if (opcode == 0xE8 || opcode == 0xE9) return index + 5;
     if (opcode == 0xEB) return index + 2;
     if (opcode >= 0x70 && opcode <= 0x7F) return index + 2;
@@ -84,10 +86,22 @@ size_t InstructionLength(const unsigned char* code) {
         }
         return size + 4;
     }
-    if (opcode == 0x6A || opcode == 0xB0 || opcode <= 0x3F) {
-        if (opcode == 0x6A) return index + 2;
-        if (opcode >= 0xB0 && opcode <= 0xB7) return index + 2;
-        return index + 1;
+    if (opcode == 0x6A) return index + 2;
+    if (opcode >= 0xB0 && opcode <= 0xB7) return index + 2;
+    if (opcode == 0xC3) return index + 1;
+    if (opcode <= 0x3F) return index + 1;
+    if (opcode == 0x83) {
+        const unsigned char modrm = code[index + 1];
+        const unsigned char mod = modrm >> 6;
+        const unsigned char rm = modrm & 7;
+        size_t size = index + 2;
+        if (mod != 3) {
+            if (rm == 4) size += 1;
+            if (mod == 0 && rm == 5) size += 4;
+            else if (mod == 1) size += 1;
+            else if (mod == 2) size += 4;
+        }
+        return size + 1;
     }
 
     // Generic fallback: opcode + modrm(+sib+disp)
