@@ -26,5 +26,18 @@ check('payload reached original', after.lastPayload === 'second-payload', 'got '
 const rr = addon.RecvPacket();
 check('RecvPacket returns 42', rr === 42, 'got ' + rr);
 
+const waitMs = parseInt(process.env.HOOK_WAIT_MS || '0', 10);
+if (waitMs > 0) {
+    console.log('waiting ' + waitMs + 'ms for deferred hook install...');
+    const start = Date.now();
+    while (Date.now() - start < waitMs) {}
+    console.log('calling again after hook install window');
+    const r3 = addon.SendSSORequestInternal('after-hook');
+    check('post-install call returns 3', r3 === 3, 'got ' + r3);
+    const s2 = addon.getStats();
+    check('post-install count is 3', s2.targetCalls === 3, 'got ' + s2.targetCalls);
+    check('post-install payload', s2.lastPayload === 'after-hook', 'got ' + s2.lastPayload);
+}
+
 console.log(failures === 0 ? 'ALL_PASS' : 'FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

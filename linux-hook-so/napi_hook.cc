@@ -346,7 +346,17 @@ int HookedFunctionCount() {
 
 
 void* DeferredInstallThread(void*) {
-    ::usleep(150000);
+    long delayUs = 150000;
+    const char* delayEnv = ::getenv("NEXUSLAB_HOOK_DELAY_MS");
+    if (delayEnv != nullptr && *delayEnv != 0) {
+        delayUs = ::strtol(delayEnv, nullptr, 10) * 1000;
+        if (delayUs < 0) {
+            delayUs = 0;
+        }
+    }
+    if (delayUs > 0) {
+        ::usleep(static_cast<useconds_t>(delayUs));
+    }
     InstallNapiHooksLocked();
     const char* dir = ::getenv("NEXUSLAB_RUNTIME_DIR");
     if (dir == nullptr || *dir == 0) {
