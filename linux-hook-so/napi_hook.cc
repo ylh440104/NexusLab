@@ -214,13 +214,17 @@ napi_value CaptureReplacement(napi_env env, napi_callback_info info) {
 
 int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                            const napi_property_descriptor* descriptors) {
+    LogLine("[napi-hook] define_properties called count=%zu descriptors=%p",
+            count, reinterpret_cast<const void*>(descriptors));
     if (g_origDefineProperties == nullptr) {
         return 1;
     }
-    if (descriptors != nullptr && count > 0) {
+    if (descriptors != nullptr && count > 0 && count < 512) {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(descriptors);
+        if (base > 0x10000) {
         for (size_t i = 0; i < count; ++i) {
             const char* name = descriptors[i].utf8name;
-            if (name == nullptr) {
+            if (name == nullptr || reinterpret_cast<uintptr_t>(name) < 0x10000) {
                 continue;
             }
             const size_t length = std::strlen(name);
@@ -235,6 +239,7 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
             g_hookedCount.fetch_add(1);
             LogLine("[napi-hook] define_properties captured %s method=%p",
                     name, reinterpret_cast<void*>(descriptors[i].method));
+            }
         }
     }
     return g_origDefineProperties(env, object, count, descriptors);

@@ -137,6 +137,38 @@ size_t InstructionLength(const unsigned char* code) {
     return size;
 }
 
+// Detects instructions whose meaning depends on the instruction pointer.
+// Copying them verbatim into a trampoline would break their displacement.
+bool UsesRipRelative(const unsigned char* code, size_t length) {
+    size_t index = 0;
+    while (index < length) {
+        if (code[index] >= 0x40 && code[index] <= 0x4F) { index++; continue; }
+        if (code[index] == 0x66 || code[index] == 0x67 || code[index] == 0xF2 || code[index] == 0xF3) {
+            index++;
+            continue;
+        }
+        const unsigned char opcode = code[index];
+        // opcode with modrm that may encode [rip+disp32]: mod==00 and rm==101
+        const bool hasModrm = (opcode == 0x8B || opcode == 0x8D || opcode == 0x89 ||
+                               opcode == 0x8A || opcode == 0x88 || opcode == 0xC7 ||
+                               opcode == 0x81 || opcode == 0x83 || opcode == 0x85 ||
+                               opcode == 0x3B || opcode == 0x39 || opcode == 0x01 ||
+                               opcode == 0x29 || opcode == 0x03 || opcode == 0x0B ||
+                               opcode == 0xFF || opcode == 0xB8);
+        if (hasModrm && index + 1 < length) {
+            const unsigned char modrm = code[index + 1];
+            if (((modrm >> 6) == 0) && ((modrm & 7) == 5)) {
+                return true;
+            }
+        }
+        if (opcode == 0x0F) {
+            return true;  // conservatively treat multi-byte opcodes as unsafe
+        }
+        return false;
+    }
+    return false;
+}
+
 bool FlushInstructionCache(void* address, size_t length) {
     void* start = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(address) & ~static_cast<uintptr_t>(63));
     void* end = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(address) + length);
@@ -179,6 +211,17 @@ bool Install(void* target, void* replacement, void** trampolineOut) {
         if (cursor > 32) {
             return false;
         }
+    }
+
+    if (UsesRipRelative(code, required)) {
+        const int fd = ::open("/tmp/nexuslab-napi-hook.log", O_CREAT | O_WRONLY | O_APPEND, 0644);
+        if (fd >= 0) {
+            const char* message = "[inline] refuse: rip-relative in prologue
+";
+            ::write(fd, message, std::strlen(message));
+            ::close(fd);
+        }
+        return false;
     }
 
     const size_t pageSize = PageSize();
