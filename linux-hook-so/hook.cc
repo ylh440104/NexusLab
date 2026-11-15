@@ -25,7 +25,7 @@ extern "C" {
 int nexuslab_napi_bridge_available();
 int nexuslab_napi_bridge_post(uint32_t requestId, const char* cmd, const void* body, uint32_t bodyLen);
 }
-int nexuslab_linux_hook_send_reply(uint32_t requestId, int32_t status, const void* body, uint32_t bodyLen);
+extern "C" int nexuslab_linux_hook_send_reply(uint32_t requestId, int32_t status, const void* body, uint32_t bodyLen);
 extern "C" {
 int nexuslab_napi_bridge_available();
 int nexuslab_napi_bridge_post(uint32_t requestId, const char* cmd, const void* body, uint32_t bodyLen);
@@ -268,6 +268,48 @@ bool TakeSendRequest(SendRequest* out, int timeoutMs) {
 }
 
 
+std::atomic<int> g_controlFd{-1};
+
+extern "C" int nexuslab_linux_hook_send_reply(uint32_t requestId, int32_t status, const void* body, uint32_t bodyLen) {
+    const int fd = g_controlFd.load();
+    if (fd < 0) {
+        return 0;
+    }
+    const uint32_t boundedLen = bodyLen > kMaxBody ? kMaxBody : bodyLen;
+    std::vector<uint8_t> out(kHeaderSize + boundedLen);
+    BuildHeader(out.data(), 4, status, 0, requestId, 0, 0, boundedLen, 0);
+    if (boundedLen > 0 && body != nullptr) {
+        std::memcpy(out.data() + kHeaderSize, body, boundedLen);
+    }
+    return WriteAll(fd, out.data(), out.size()) ? 1 : 0;
+}
+
+extern "C" int nexuslab_linux_hook_take_send(char* cmdBuf, size_t cmdCap, void* bodyBuf, size_t bodyCap, uint32_t* requestId, uint32_t* flags, size_t* bodyLenOut, int timeoutMs) {
+    SendRequest req;
+    if (!TakeSendRequest(&req, timeoutMs)) {
+        return 0;
+    }
+    if (cmdBuf != nullptr && cmdCap > 0) {
+        std::snprintf(cmdBuf, cmdCap, "%s", req.cmd.c_str());
+    }
+    size_t copyLen = req.body.size();
+    if (copyLen > bodyCap) {
+        copyLen = bodyCap;
+    }
+    if (bodyBuf != nullptr && copyLen > 0) {
+        std::memcpy(bodyBuf, req.body.data(), copyLen);
+    }
+    if (requestId != nullptr) {
+        *requestId = req.requestId;
+    }
+    if (flags != nullptr) {
+        *flags = req.flags;
+    }
+    if (bodyLenOut != nullptr) {
+        *bodyLenOut = copyLen;
+    }
+    return 1;
+}
 void SenderLoop() {
     while (!g_stopping.load()) {
         SendRequest req;
@@ -289,6 +331,7 @@ void SenderLoop() {
 }
 
 void ControlSession(int fd) {
+    g_controlFd.store(fd);
     SendHello(fd, g_controlPath, static_cast<uint32_t>(::getpid()));
     unsigned long long lastPush = 0;
     while (!g_stopping.load()) {
