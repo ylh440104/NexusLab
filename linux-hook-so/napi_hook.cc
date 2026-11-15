@@ -883,7 +883,7 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                 if (jsFn != nullptr) {
                     napi_value resName = nullptr;
                     g_api.createStringUtf8(env, "nexuslab-bridge", NAPI_AUTO_LENGTH, &resName);
-                    rc = g_api.createThreadsafe(env, jsFn, resName, (napi_value)nullptr, (size_t)0, (size_t)4, (void*)nullptr, (void*)nullptr, (void*)nullptr, &BridgeCallJs, &tsfn);
+                    rc = g_api.createThreadsafe(env, jsFn, (napi_value)nullptr, resName, (size_t)0, (size_t)4, (void*)nullptr, (void*)nullptr, (void*)nullptr, &BridgeCallJs, &tsfn);
                 }
                 LogLine("[bridge] tsfn create rc=%d tsfn=%p", rc, reinterpret_cast<void*>(tsfn));
                 if (rc == 0 && tsfn != nullptr) {
