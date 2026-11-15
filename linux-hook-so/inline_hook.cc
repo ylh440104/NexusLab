@@ -216,9 +216,10 @@ bool Install(void* target, void* replacement, void** trampolineOut) {
     if (UsesRipRelative(code, required)) {
         const int fd = ::open("/tmp/nexuslab-napi-hook.log", O_CREAT | O_WRONLY | O_APPEND, 0644);
         if (fd >= 0) {
-            const char* message = "[inline] refuse: rip-relative in prologue
-";
+            const char* message = "[inline] refuse rip-relative prologue";
+            const char newline = 10;
             ::write(fd, message, std::strlen(message));
+            ::write(fd, &newline, 1);
             ::close(fd);
         }
         return false;
