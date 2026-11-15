@@ -62,7 +62,9 @@ async function main() {
     const reqId = 9001;
     sock.write(buildFrame(2, reqId, 1, 'trpc.Roundtrip.Test', Buffer.from('PAYLOAD123')));
 
-    await new Promise(r => setTimeout(r, 1200));
+    for (let i = 0; i < 24; i++) {
+        await new Promise(r => setTimeout(r, 50));
+    }
 
     const ack = frames.slice(before).find(f => f.op === 3 && f.reqId === reqId);
     check('send ack (op=3)', !!ack);
@@ -73,6 +75,7 @@ async function main() {
     check('body payload reached target', after.lastPayload === 'PAYLOAD123',
           JSON.stringify(after.lastPayload));
 
+    await new Promise(r => setTimeout(r, 100));
     sock.destroy();
     console.log(failures === 0 ? 'E2E_ALL_PASS' : 'E2E_FAILURES=' + failures);
     process.exit(failures === 0 ? 0 : 1);
