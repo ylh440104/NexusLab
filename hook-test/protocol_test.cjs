@@ -67,7 +67,7 @@ async function main() {
         }
     });
 
-    await new Promise(r => setTimeout(r, 700));
+    for (let i = 0; i < 14; i++) { await new Promise(r => setTimeout(r, 50)); }
     check('control socket connectable', connected, CONTROL);
 
     const hello = frames.find(f => f.header.op === 1);
@@ -86,7 +86,7 @@ async function main() {
     sock.write(buildFrame(2, reqId, 1, 'trpc.test.Service.Method',
                           Buffer.from([1, 2, 3, 4, 5])));
 
-    await new Promise(r => setTimeout(r, 500));
+    for (let i = 0; i < 10; i++) { await new Promise(r => setTimeout(r, 50)); }
 
     const ack = frames.slice(before).find(f => f.header.op === 3 && f.header.requestId === reqId);
     check('received SEND_ACK (op=3)', !!ack, ack ? 'reqId=' + ack.header.requestId : 'none');
@@ -98,6 +98,7 @@ async function main() {
     const err5 = frames.slice(before).find(f => f.header.op === 5);
     check('no error frame for op=2', !err5);
 
+    await new Promise(r => setTimeout(r, 50));
     sock.destroy();
     console.log(failures === 0 ? 'PROTOCOL_ALL_PASS' : 'PROTOCOL_FAILURES=' + failures);
     process.exit(failures === 0 ? 0 : 1);
