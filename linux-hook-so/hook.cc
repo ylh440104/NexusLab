@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <errno.h>
+#include "napi_hook.h"
 
 namespace {
 
@@ -371,6 +372,7 @@ __attribute__((constructor, used, visibility("default"))) void nexuslab_auto_sta
     if (g_loaded.load()) {
         return;
     }
+    nexuslab_napi::InstallNapiHooks();
     const char* dir = ::getenv("NEXUSLAB_RUNTIME_DIR");
     nexuslab_linux_hook_start_dynamic(dir);
 }

@@ -1,0 +1,46 @@
+name: Build Linux Hook (napi interception)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'linux-hook-so/**'
+      - '.github/workflows/build-hook.yml'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build hook
+        run: |
+          cd linux-hook-so
+          g++ -shared -fPIC -O2 -std=c++17 -pthread \
+            -o /tmp/nexuslab-hook-${{ matrix.arch }}.so \
+            hook.cc napi_hook.cc inline_hook.cc
+          ls -la /tmp/nexuslab-hook-${{ matrix.arch }}.so
+          file /tmp/nexuslab-hook-${{ matrix.arch }}.so
+
+      - name: Verify exports and symbols
+        run: |
+          echo '--- exported hook api ---'
+          nm -D --defined-only /tmp/nexuslab-hook-${{ matrix.arch }}.so | grep nexuslab_linux_hook || true
+          echo '--- napi hook strings ---'
+          strings /tmp/nexuslab-hook-${{ matrix.arch }}.so | grep -E 'SendSSORequestInternal|napi_create_function|napi-hook' | head -8
+
+      - name: Upload hook
+        uses: actions/upload-artifact@v4
+        with:
+          name: hook-${{ matrix.arch }}
+          path: /tmp/nexuslab-hook-${{ matrix.arch }}.so
+          retention-days: 14
