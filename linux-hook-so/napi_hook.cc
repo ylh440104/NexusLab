@@ -346,7 +346,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     napi_value arityValue = nullptr;
     if (g_api.getNamedProperty(env, target, "length", &arityValue) == 0 && arityValue != nullptr) {
         int32_t parsed = 0;
-        if (g_api.getValueInt32(env, arityValue, &parsed) == 0 && parsed >= 0 && parsed <= 3) {
+        if (g_api.getValueInt32(env, arityValue, &parsed) == 0 && parsed >= 1 && parsed <= 3) {
             arity = parsed;
         }
     }
