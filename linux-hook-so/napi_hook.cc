@@ -385,6 +385,18 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     if (g_api.isPromise != nullptr && result != nullptr) {
         g_api.isPromise(env, result, &isPromise);
     }
+    if (!isPromise && result != nullptr) {
+        napi_value typeProbe = nullptr;
+        napi_value thenProbe = nullptr;
+        if (g_api.getNamedProperty(env, result, "then", &thenProbe) == 0 && thenProbe != nullptr) {
+            int32_t thenType = -1;
+            if (g_api.typeOf != nullptr && g_api.typeOf(env, thenProbe, &thenType) == 0 && thenType == 6) {
+                isPromise = true;
+            }
+        }
+        (void)typeProbe;
+    }
+    LogLine("[bridge] isPromise=%d result=%p", isPromise ? 1 : 0, reinterpret_cast<void*>(result));
     if (isPromise) {
         LogLine("[bridge] promise detected, attaching then");
         napi_value thenFn = nullptr;
