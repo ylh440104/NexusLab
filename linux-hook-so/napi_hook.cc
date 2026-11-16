@@ -273,6 +273,56 @@ struct SendBridgeRequest {
     std::string body;
 };
 
+void DeepEnumerate(napi_env env, uint32_t requestId, napi_value obj) {
+    char buf[4096];
+    size_t off = 0;
+    buf[0] = 0;
+    napi_value cur = obj;
+    int depth = 0;
+    while (cur != nullptr && depth < 4 && off + 200 < sizeof(buf)) {
+        napi_value names = nullptr;
+        if (g_api.getPropertyNames != nullptr && g_api.getPropertyNames(env, cur, &names) == 0 && names != nullptr) {
+            uint32_t len = 0;
+            g_api.getArrayLength(env, names, &len);
+            off += static_cast<size_t>(snprintf(buf + off, sizeof(buf) - off - 1, "[L%d(%u)", depth, len));
+            for (uint32_t i = 0; i < len && off + 140 < sizeof(buf); ++i) {
+                napi_value item = nullptr;
+                g_api.getElement(env, names, i, &item);
+                char nm[96];
+                nm[0] = 0;
+                size_t n = 0;
+                if (item != nullptr) {
+                    g_api.getValueStringUtf8(env, item, nm, sizeof(nm) - 1, &n);
+                    off += static_cast<size_t>(snprintf(buf + off, sizeof(buf) - off - 1, "%s,", nm));
+                }
+            }
+            off += static_cast<size_t>(snprintf(buf + off, sizeof(buf) - off - 1, "]"));
+        }
+        napi_value proto = nullptr;
+        if (g_api.getNamedProperty(env, cur, "__proto__", &proto) != 0 || proto == nullptr) {
+            break;
+        }
+        cur = proto;
+        depth++;
+    }
+    LogLine("[bridge] deep enum: %s", buf);
+    nexuslab_linux_hook_send_reply(requestId, 0, buf, static_cast<uint32_t>(off));
+}
+
+void DumpFunctionSource(napi_env env, uint32_t requestId, napi_value fn) {
+    char buf[2048];
+    buf[0] = 0;
+    size_t off = 0;
+    if (fn != nullptr && g_api.coerceToString != nullptr) {
+        napi_value s = nullptr;
+        if (g_api.coerceToString(env, fn, &s) == 0 && s != nullptr) {
+            g_api.getValueStringUtf8(env, s, buf, sizeof(buf) - 1, &off);
+        }
+    }
+    LogLine("[bridge] fn source: %s", buf);
+    nexuslab_linux_hook_send_reply(requestId, 0, buf, static_cast<uint32_t>(off));
+}
+
 void ReplyWithObjectKeys(napi_env env, uint32_t requestId, napi_value obj) {
     char buf[2048];
     size_t off = 0;
@@ -435,6 +485,27 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         }
         LogLine("[bridge] names total=%d", total);
         nexuslab_linux_hook_send_reply(req->requestId, 0, buf, static_cast<uint32_t>(off));
+        delete req;
+        return;
+    }
+    if (req->cmd == "__deep") {
+        napi_value cached = nullptr;
+        if (g_sessionRef != nullptr && g_api.getReferenceValue(env, g_sessionRef, &cached) == 0 && cached != nullptr) {
+            DeepEnumerate(env, req->requestId, cached);
+        } else {
+            const char* m = "no session";
+            nexuslab_linux_hook_send_reply(req->requestId, -1, m, strlen(m));
+        }
+        delete req;
+        return;
+    }
+    if (req->cmd == "__src") {
+        napi_value cached = nullptr;
+        napi_value fn = nullptr;
+        if (g_sessionRef != nullptr && g_api.getReferenceValue(env, g_sessionRef, &cached) == 0 && cached != nullptr) {
+            g_api.getNamedProperty(env, cached, "sendSSORequest", &fn);
+        }
+        DumpFunctionSource(env, req->requestId, fn);
         delete req;
         return;
     }
