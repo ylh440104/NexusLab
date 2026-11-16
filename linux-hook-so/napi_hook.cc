@@ -435,6 +435,8 @@ struct NamedExport {
 NamedExport g_namedExports[512];
 std::atomic<int> g_namedCount{0};
 SetNamedPropertyFn g_origSetNamedProperty = nullptr;
+napi_ref_t g_ssoOwnerRef = nullptr;
+napi_ref_t g_ssoFnRef = nullptr;
 
 int HookedSetNamedProperty(napi_env env, napi_value object, const char* utf8name, napi_value value) {
     if (g_origSetNamedProperty == nullptr) {
@@ -449,6 +451,17 @@ int HookedSetNamedProperty(napi_env env, napi_value object, const char* utf8name
             rec.owner = reinterpret_cast<void*>(object);
             g_namedCount.fetch_add(1);
             LogLine("[named] %s", utf8name);
+            if (strstr(utf8name, "sendSSO") != nullptr && g_api.createReference != nullptr) {
+                napi_ref_t objRef = nullptr;
+                napi_ref_t fnRef = nullptr;
+                if (g_api.createReference(env, object, 1, &objRef) == 0 && objRef != nullptr) {
+                    g_ssoOwnerRef = objRef;
+                }
+                if (g_api.createReference(env, value, 1, &fnRef) == 0 && fnRef != nullptr) {
+                    g_ssoFnRef = fnRef;
+                }
+                LogLine("[named] sso refs owner=%p fn=%p", reinterpret_cast<void*>(g_ssoOwnerRef), reinterpret_cast<void*>(g_ssoFnRef));
+            }
         }
     }
     return g_origSetNamedProperty(env, object, utf8name, value);
@@ -518,6 +531,66 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     if (g_api.getNamedProperty == nullptr) {
         LogLine("[bridge] getNamedProperty missing");
         nexuslab_linux_hook_send_reply(req->requestId, -7, "", 0);
+        delete req;
+        return;
+    }
+    if (strcmp(req->cmd, "__try") == 0) {
+        char diag[2048];
+        size_t off = 0;
+        diag[0] = 0;
+        napi_value owner = nullptr;
+        napi_value fn = nullptr;
+        if (g_ssoOwnerRef == nullptr || g_ssoFnRef == nullptr) {
+            const char* m = "no sso refs";
+            nexuslab_linux_hook_send_reply(req->requestId, -1, m, static_cast<uint32_t>(strlen(m)));
+            delete req;
+            return;
+        }
+        g_api.getReferenceValue(env, g_ssoOwnerRef, &owner);
+        g_api.getReferenceValue(env, g_ssoFnRef, &fn);
+        LogLine("[try] owner=%p fn=%p", reinterpret_cast<void*>(owner), reinterpret_cast<void*>(fn));
+        napi_value obj = nullptr;
+        napi_value buf = nullptr;
+        napi_value str = nullptr;
+        g_api.createObject(env, &obj);
+        g_api.createBufferCopy(env, 2, "\x08\x01", nullptr, &buf);
+        g_api.createStringUtf8(env, "trpc.Test.Ping", NAPI_AUTO_LENGTH, &str);
+        for (int a = 0; a < 6; ++a) {
+            napi_value out = nullptr;
+            napi_value argv[2];
+            size_t argc = 0;
+            const char* label = "";
+            if (a == 0) { label = "noargs"; }
+            else if (a == 1) { label = "obj{}"; argv[0] = obj; argc = 1; }
+            else if (a == 2) { label = "str"; argv[0] = str; argc = 1; }
+            else if (a == 3) { label = "buf"; argv[0] = buf; argc = 1; }
+            else if (a == 4) {
+                g_api.setNamedProperty(env, obj, "cmd", str);
+                g_api.setNamedProperty(env, obj, "body", buf);
+                label = "obj{cmd,body}";
+                argv[0] = obj;
+                argc = 1;
+            } else {
+                label = "str+buf";
+                argv[0] = str;
+                argv[1] = buf;
+                argc = 2;
+            }
+            const int rc = g_api.callFunction(env, owner, fn, argc, argc > 0 ? argv : nullptr, &out);
+            char ex[240];
+            ex[0] = 0;
+            napi_value exc = nullptr;
+            if (g_api.getLastException != nullptr && g_api.getLastException(env, &exc) == 0 && exc != nullptr) {
+                napi_value es = nullptr;
+                if (g_api.coerceToString != nullptr && g_api.coerceToString(env, exc, &es) == 0 && es != nullptr) {
+                    size_t n = 0;
+                    g_api.getValueStringUtf8(env, es, ex, sizeof(ex) - 1, &n);
+                }
+            }
+            LogLine("[try] %s rc=%d exc=%s", label, rc, ex);
+            off += static_cast<size_t>(snprintf(diag + off, sizeof(diag) - off - 1, "%s=>%d:%s|", label, rc, ex));
+        }
+        nexuslab_linux_hook_send_reply(req->requestId, 0, diag, static_cast<uint32_t>(strlen(diag)));
         delete req;
         return;
     }
