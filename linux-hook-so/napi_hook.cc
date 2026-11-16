@@ -426,6 +426,34 @@ CaptureSlot g_captureTable[kMaxCaptureSlots];
 std::atomic<int> g_captureSlots{0};
 
 napi_ref_t g_exportsRef = nullptr;
+
+struct NamedExport {
+    char name[128];
+    void* fn;
+    void* owner;
+};
+NamedExport g_namedExports[512];
+std::atomic<int> g_namedCount{0};
+SetNamedPropertyFn g_origSetNamedProperty = nullptr;
+
+int HookedSetNamedProperty(napi_env env, napi_value object, const char* utf8name, napi_value value) {
+    if (g_origSetNamedProperty == nullptr) {
+        return 1;
+    }
+    if (utf8name != nullptr) {
+        const int idx = g_namedCount.load();
+        if (idx < 512) {
+            NamedExport& rec = g_namedExports[idx];
+            snprintf(rec.name, sizeof(rec.name), "%s", utf8name);
+            rec.fn = reinterpret_cast<void*>(value);
+            rec.owner = reinterpret_cast<void*>(object);
+            g_namedCount.fetch_add(1);
+            LogLine("[named] %s", utf8name);
+        }
+    }
+    return g_origSetNamedProperty(env, object, utf8name, value);
+}
+
 napi_ref_t g_sessionRef = nullptr;
 
 napi_value ExportsValue(napi_env env) {
@@ -490,6 +518,20 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     if (g_api.getNamedProperty == nullptr) {
         LogLine("[bridge] getNamedProperty missing");
         nexuslab_linux_hook_send_reply(req->requestId, -7, "", 0);
+        delete req;
+        return;
+    }
+    if (strcmp(req->cmd, "__named") == 0) {
+        char buf[8192];
+        size_t off = 0;
+        buf[0] = 0;
+        const int total = g_namedCount.load();
+        for (int i = 0; i < total && off + 140 < sizeof(buf); ++i) {
+            off += static_cast<size_t>(snprintf(buf + off, sizeof(buf) - off - 1, "%s;", g_namedExports[i].name));
+        }
+        LogLine("[bridge] named total=%d", total);
+        LogLine("[bridge] NAMEDLIST %s", buf);
+        nexuslab_linux_hook_send_reply(req->requestId, 0, buf, static_cast<uint32_t>(off));
         delete req;
         return;
     }
@@ -1521,6 +1563,15 @@ void InstallNapiHooksLocked() {
             LogLine("[napi-hook] napi_define_properties hooked; trampoline=%p", propsTrampoline);
         } else {
             LogLine("[napi-hook] inline hook on napi_define_properties FAILED");
+        }
+    }
+    if (g_api.setNamedProperty != nullptr && g_origSetNamedProperty == nullptr) {
+        void* snpTrampoline = nullptr;
+        if (nexuslab_inline::Install(reinterpret_cast<void*>(g_api.setNamedProperty),
+                                     reinterpret_cast<void*>(&HookedSetNamedProperty),
+                                     &snpTrampoline)) {
+            g_origSetNamedProperty = reinterpret_cast<SetNamedPropertyFn>(snpTrampoline);
+            LogLine("[napi-hook] napi_set_named_property hooked; trampoline=%p", snpTrampoline);
         }
     }
 }
