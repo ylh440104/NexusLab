@@ -47,6 +47,8 @@ typedef int (*GetGlobalFnT)(napi_env, napi_value*);
 typedef int (*CallFunctionFn)(napi_env, napi_value, napi_value, size_t, const napi_value*, napi_value*);
 typedef int (*CreateBufferCopyFn)(napi_env, size_t, const void*, void**, napi_value*);
 constexpr size_t NAPI_AUTO_LENGTH = static_cast<size_t>(-1);
+typedef int (*GetValueDoubleFnT)(napi_env, napi_value, double*);
+typedef int (*GetValueBoolFn)(napi_env, napi_value, bool*);
 typedef int (*GetCbInfoFn)(napi_env, napi_callback_info, size_t*, napi_value*, napi_value*, void**);
 typedef int (*GetValueStringUtf8Fn)(napi_env, napi_value, char*, size_t, size_t*);
 typedef int (*TypeofFn)(napi_env, napi_value, int*);
@@ -130,6 +132,8 @@ struct NapiApi {
     CallFunctionFn callFunction = nullptr;
     CreateBufferCopyFn createBufferCopy = nullptr;
     GetUndefinedFn getUndefined = nullptr;
+    GetValueDoubleFnT getValueDoubleFn = nullptr;
+    GetValueBoolFn getValueBool = nullptr;
     GetLastExceptionFn getLastException = nullptr;
     CoerceToStringFn coerceToString = nullptr;
     IsPromiseFn isPromise = nullptr;
@@ -193,6 +197,7 @@ bool LoadNapiApi() {
     NEXUS_BIND(callFunction, "napi_call_function")
     NEXUS_BIND(createBufferCopy, "napi_create_buffer_copy")
     NEXUS_BIND(getUndefined, "napi_get_undefined")
+    NEXUS_BIND(getValueDoubleFn, "napi_get_value_double")
     NEXUS_BIND(getLastException, "napi_get_and_clear_last_exception")
     NEXUS_BIND(coerceToString, "napi_coerce_to_string")
     NEXUS_BIND(isPromise, "napi_is_promise")
@@ -470,6 +475,42 @@ CaptureSlot* FindSlotByOriginal(void* original) {
     return nullptr;
 }
 
+std::atomic<int> g_argDumpCount{0};
+
+void DumpCallArgs(napi_env env, napi_callback_info info) {
+    if (g_argDumpCount.load() >= 20) {
+        return;
+    }
+    const int seq = g_argDumpCount.fetch_add(1);
+    if (g_api.getCbInfo == nullptr || g_api.typeOf == nullptr) {
+        return;
+    }
+    size_t argc = 8;
+    napi_value argv[8];
+    g_api.getCbInfo(env, info, &argc, argv, nullptr, nullptr);
+    LogLine("[args] seq=%d argc=%zu", seq, argc);
+    for (size_t i = 0; i < argc && i < 8; ++i) {
+        int32_t t = -1;
+        g_api.typeOf(env, argv[i], &t);
+        if (t == 4) {
+            char s[512];
+            s[0] = 0;
+            size_t n = 0;
+            g_api.getValueStringUtf8(env, argv[i], s, sizeof(s) - 1, &n);
+            LogLine("[args]   [%zu] string=%s", i, s);
+        } else if (t == 3) {
+            double d = 0;
+            g_api.getValueDoubleFn(env, argv[i], &d);
+            LogLine("[args]   [%zu] number=%f", i, d);
+        } else if (t == 9) {
+            bool b = false;
+            g_api.getValueBool(env, argv[i], &b);
+            LogLine("[args]   [%zu] boolean=%d", i, b ? 1 : 0);
+        } else {
+            LogLine("[args]   [%zu] type=%d", i, t);
+        }
+    }
+}
 napi_value ProxyDispatchBySlot(int slotIndex, napi_env env, napi_callback_info info) {
     if (slotIndex < 0 || slotIndex >= kMaxCaptureSlots) {
         return nullptr;
@@ -479,6 +520,7 @@ napi_value ProxyDispatchBySlot(int slotIndex, napi_env env, napi_callback_info i
     if (original == nullptr) {
         return nullptr;
     }
+    DumpCallArgs(env, info);
     slot.calls.fetch_add(1);
     LogLine("[proxy] slot#%d batch=%s idx=%zu fn=%p calls=%d",
             slotIndex, slot.batchFirst, slot.index,
