@@ -76,6 +76,8 @@ typedef int (*IsTypedarrayFn)(napi_env, napi_value, bool*);
 
 typedef void (*ThrowErrorFn)(napi_env, const char*, const char*);
 typedef int (*IsPromiseFn)(napi_env, napi_value, bool*);
+typedef int (*GetLastExceptionFn)(napi_env, napi_value*);
+typedef int (*CoerceToStringFn)(napi_env, napi_value, napi_value*);
 typedef int (*GetUndefinedFn)(napi_env, napi_value*);
 typedef struct {
     const char* utf8name;
@@ -128,6 +130,8 @@ struct NapiApi {
     CallFunctionFn callFunction = nullptr;
     CreateBufferCopyFn createBufferCopy = nullptr;
     GetUndefinedFn getUndefined = nullptr;
+    GetLastExceptionFn getLastException = nullptr;
+    CoerceToStringFn coerceToString = nullptr;
     IsPromiseFn isPromise = nullptr;
     OpenHandleScopeFn openHandleScope = nullptr;
     CloseHandleScopeFn closeHandleScope = nullptr;
@@ -189,6 +193,8 @@ bool LoadNapiApi() {
     NEXUS_BIND(callFunction, "napi_call_function")
     NEXUS_BIND(createBufferCopy, "napi_create_buffer_copy")
     NEXUS_BIND(getUndefined, "napi_get_undefined")
+    NEXUS_BIND(getLastException, "napi_get_and_clear_last_exception")
+    NEXUS_BIND(coerceToString, "napi_coerce_to_string")
     NEXUS_BIND(isPromise, "napi_is_promise")
     NEXUS_BIND(openHandleScope, "napi_open_handle_scope")
     NEXUS_BIND(closeHandleScope, "napi_close_handle_scope")
@@ -258,6 +264,23 @@ struct SendBridgeRequest {
     char cmd[256];
     std::string body;
 };
+
+void ReplyWithException(napi_env env, uint32_t requestId) {
+    char text[1024];
+    text[0] = 0;
+    size_t len = 0;
+    if (g_api.getLastException != nullptr) {
+        napi_value exc = nullptr;
+        if (g_api.getLastException(env, &exc) == 0 && exc != nullptr) {
+            napi_value asString = nullptr;
+            if (g_api.coerceToString != nullptr && g_api.coerceToString(env, exc, &asString) == 0 && asString != nullptr) {
+                g_api.getValueStringUtf8(env, asString, text, sizeof(text) - 1, &len);
+            }
+        }
+    }
+    LogLine("[bridge] js exception reqId=%u text=%s", requestId, text);
+    nexuslab_linux_hook_send_reply(requestId, -6, text, static_cast<uint32_t>(len));
+}
 
 void ReplyWithValue(napi_env env, uint32_t requestId, napi_value value, int32_t status) {
     char buf[1024];
@@ -377,7 +400,8 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     const int rc = g_api.callFunction(env, exports, target, callArgc, callArgs, &result);
     LogLine("[bridge] call rc=%d argc=%zu", rc, callArgc);
     if (rc != 0) {
-        nexuslab_linux_hook_send_reply(req->requestId, -4, "", 0);
+        LogLine("[bridge] call failed rc=%d argc=%zu", rc, callArgc);
+        ReplyWithException(env, req->requestId);
         delete req;
         return;
     }
