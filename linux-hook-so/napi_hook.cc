@@ -401,14 +401,18 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         LogLine("[bridge] promise detected, attaching then");
         napi_value thenFn = nullptr;
         napi_value handler = nullptr;
-        if (g_api.getNamedProperty(env, result, "then", &thenFn) == 0 && thenFn != nullptr &&
-            g_api.createFunction != nullptr &&
-            g_api.createFunction(env, "nexuslabThen", NAPI_AUTO_LENGTH, &PromiseThenHandler,
-                                 reinterpret_cast<void*>(static_cast<uintptr_t>(req->requestId)), &handler) == 0 &&
-            handler != nullptr) {
+        const int thenRc = g_api.getNamedProperty(env, result, "then", &thenFn);
+        LogLine("[bridge] then lookup rc=%d fn=%p", thenRc, reinterpret_cast<void*>(thenFn));
+        int fnRc = -1;
+        if (thenRc == 0 && thenFn != nullptr) {
+            fnRc = g_api.createFunction(env, "nexuslabThen", NAPI_AUTO_LENGTH, &PromiseThenHandler,
+                                        reinterpret_cast<void*>(static_cast<uintptr_t>(req->requestId)), &handler);
+            LogLine("[bridge] handler create rc=%d handler=%p", fnRc, reinterpret_cast<void*>(handler));
+        }
+        if (thenRc == 0 && thenFn != nullptr && fnRc == 0 && handler != nullptr) {
             napi_value chained = nullptr;
-            g_api.callFunction(env, result, thenFn, 1, &handler, &chained);
-            LogLine("[bridge] then attached");
+            const int chainRc = g_api.callFunction(env, result, thenFn, 1, &handler, &chained);
+            LogLine("[bridge] then attached rc=%d", chainRc);
         } else {
             LogLine("[bridge] then attach failed");
             nexuslab_linux_hook_send_reply(req->requestId, -5, "", 0);
