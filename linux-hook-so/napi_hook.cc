@@ -437,6 +437,9 @@ std::atomic<int> g_namedCount{0};
 SetNamedPropertyFn g_origSetNamedProperty = nullptr;
 napi_ref_t g_ssoOwnerRef = nullptr;
 napi_ref_t g_ssoFnRef = nullptr;
+struct SsoPair { napi_ref_t ownerRef; napi_ref_t fnRef; };
+SsoPair g_ssoPairs[8] = {};
+std::atomic<int> g_ssoPairCount{0};
 std::atomic<int> g_ssoValueType{-1};
 
 
@@ -479,14 +482,42 @@ napi_value SsoLiveProxy(napi_env env, napi_callback_info info) {
                 }
                 if (isBuf && g_api.getBufferInfo != nullptr) {
                     g_api.getBufferInfo(env, argv[i], &bd, &bl);
-                    off += static_cast<size_t>(snprintf(g_ssoLastArgs + off, sizeof(g_ssoLastArgs) - off - 1, "[%zu]buf=%zu|", i, bl));
+                    char hex[40];
+                    size_t ho = 0;
+                    const unsigned char* bb = static_cast<const unsigned char*>(bd);
+                    for (size_t k = 0; k < bl && k < 14; ++k) {
+                        ho += static_cast<size_t>(snprintf(hex + ho, sizeof(hex) - ho - 1, "%02x", bb[k]));
+                    }
+                    off += static_cast<size_t>(snprintf(g_ssoLastArgs + off, sizeof(g_ssoLastArgs) - off - 1, "[%zu]buf=%zu hex=%s|", i, bl, hex));
                 } else {
                     napi_value names = nullptr;
                     uint32_t keys = 0;
                     if (g_api.getPropertyNames != nullptr && g_api.getPropertyNames(env, argv[i], &names) == 0 && names != nullptr) {
                         g_api.getArrayLength(env, names, &keys);
                     }
-                    off += static_cast<size_t>(snprintf(g_ssoLastArgs + off, sizeof(g_ssoLastArgs) - off - 1, "[%zu]obj(arr=%d,keys=%u)|", i, isArr ? 1 : 0, keys));
+                    off += static_cast<size_t>(snprintf(g_ssoLastArgs + off, sizeof(g_ssoLastArgs) - off - 1, "[%zu]obj(arr=%d,keys=%u):", i, isArr ? 1 : 0, keys));
+                    for (uint32_t k = 0; k < keys && k < 8; ++k) {
+                        napi_value nm = nullptr;
+                        char key[64];
+                        key[0] = 0;
+                        size_t kn = 0;
+                        if (g_api.getElement != nullptr) {
+                            g_api.getElement(env, names, k, &nm);
+                        }
+                        if (nm != nullptr && g_api.getValueStringUtf8 != nullptr) {
+                            g_api.getValueStringUtf8(env, nm, key, sizeof(key) - 1, &kn);
+                        }
+                        int32_t vt = -1;
+                        napi_value val = nullptr;
+                        if (nm != nullptr && g_api.getProperty != nullptr) {
+                            g_api.getProperty(env, argv[i], nm, &val);
+                        }
+                        if (val != nullptr && g_api.typeOf != nullptr) {
+                            g_api.typeOf(env, val, &vt);
+                        }
+                        off += static_cast<size_t>(snprintf(g_ssoLastArgs + off, sizeof(g_ssoLastArgs) - off - 1, "%s:t%d,", key, vt));
+                    }
+                    off += static_cast<size_t>(snprintf(g_ssoLastArgs + off, sizeof(g_ssoLastArgs) - off - 1, "|"));
                 }
             } else {
                 off += static_cast<size_t>(snprintf(g_ssoLastArgs + off, sizeof(g_ssoLastArgs) - off - 1, "[%zu]type=%d|", i, t));
@@ -494,14 +525,14 @@ napi_value SsoLiveProxy(napi_env env, napi_callback_info info) {
         }
         LogLine("[live] %s", g_ssoLastArgs);
     }
+    SsoPair* pair = static_cast<SsoPair*>(data);
+    if (pair == nullptr || g_api.getReferenceValue == nullptr) {
+        return nullptr;
+    }
     napi_value owner = nullptr;
     napi_value fn = nullptr;
-    if (g_ssoOwnerRef != nullptr && g_api.getReferenceValue != nullptr) {
-        g_api.getReferenceValue(env, g_ssoOwnerRef, &owner);
-    }
-    if (g_ssoFnRef != nullptr && g_api.getReferenceValue != nullptr) {
-        g_api.getReferenceValue(env, g_ssoFnRef, &fn);
-    }
+    g_api.getReferenceValue(env, pair->ownerRef, &owner);
+    g_api.getReferenceValue(env, pair->fnRef, &fn);
     if (fn == nullptr) {
         return nullptr;
     }
@@ -541,11 +572,18 @@ int HookedSetNamedProperty(napi_env env, napi_value object, const char* utf8name
                 }
                 LogLine("[named] sso refs owner=%p fn=%p", reinterpret_cast<void*>(g_ssoOwnerRef), reinterpret_cast<void*>(g_ssoFnRef));
                 napi_value liveProxy = nullptr;
-                if (vtype == 7 && g_api.createFunction != nullptr &&
-                    g_api.createFunction(env, "ssoLiveProxy", NAPI_AUTO_LENGTH, &SsoLiveProxy, nullptr, &liveProxy) == 0 &&
-                    liveProxy != nullptr) {
-                    LogLine("[named] sso replaced by live proxy");
-                    return g_origSetNamedProperty(env, object, utf8name, liveProxy);
+                if (vtype == 7 && g_api.createFunction != nullptr) {
+                    const int slot = g_ssoPairCount.load();
+                    if (slot < 8) {
+                        SsoPair& p = g_ssoPairs[slot];
+                        p.ownerRef = g_ssoOwnerRef;
+                        p.fnRef = g_ssoFnRef;
+                        g_ssoPairCount.fetch_add(1);
+                        if (g_api.createFunction(env, "ssoLiveProxy", NAPI_AUTO_LENGTH, &SsoLiveProxy, reinterpret_cast<void*>(&g_ssoPairs[slot]), &liveProxy) == 0 && liveProxy != nullptr) {
+                            LogLine("[named] sso replaced by live proxy slot=%d", slot);
+                            return g_origSetNamedProperty(env, object, utf8name, liveProxy);
+                        }
+                    }
                 }
             }
         }
