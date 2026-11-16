@@ -354,6 +354,7 @@ CaptureSlot g_captureTable[kMaxCaptureSlots];
 std::atomic<int> g_captureSlots{0};
 
 napi_ref_t g_exportsRef = nullptr;
+napi_ref_t g_sessionRef = nullptr;
 
 napi_value ExportsValue(napi_env env) {
     if (g_exportsRef == nullptr || g_api.getReferenceValue == nullptr) {
@@ -449,40 +450,32 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
-    napi_value factory = nullptr;
-    const int factRc = g_api.getNamedProperty(env, exportsObj, "getNTWrapperSession", &factory);
-    LogLine("[bridge] factory rc=%d fn=%p", factRc, reinterpret_cast<void*>(factory));
     napi_value session = nullptr;
-    char diag[512];
-    diag[0] = 0;
-    size_t diagOff = 0;
-#define TRY_SESSION(label, argcExpr, argsExpr)     do {         napi_value tryObj = nullptr;         const int tryRc = g_api.callFunction(env, exportsObj, factory, (argcExpr), (argsExpr), &tryObj);         LogLine("[bridge] try %s rc=%d obj=%p", label, tryRc, reinterpret_cast<void*>(tryObj));         diagOff += static_cast<size_t>(snprintf(diag + diagOff, sizeof(diag) - diagOff, "%s:rc=%d", label, tryRc));         if (tryRc == 0 && tryObj != nullptr && session == nullptr) {             session = tryObj;         }         if (tryRc != 0 && g_api.getLastException != nullptr) {             napi_value exc = nullptr;             g_api.getLastException(env, &exc);             char ex[200];             ex[0] = 0;             size_t exLen = 0;             if (exc != nullptr && g_api.coerceToString != nullptr) {                 napi_value es = nullptr;                 if (g_api.coerceToString(env, exc, &es) == 0 && es != nullptr) {                     g_api.getValueStringUtf8(env, es, ex, sizeof(ex) - 1, &exLen);                 }             }             LogLine("[bridge] try %s exc=%s", label, ex);             diagOff += static_cast<size_t>(snprintf(diag + diagOff, sizeof(diag) - diagOff, "(%s)", ex));         }     } while (0)
-
-    if (factRc == 0 && factory != nullptr) {
-        napi_value sid = nullptr;
-        g_api.createStringUtf8(env, "nt_1", NAPI_AUTO_LENGTH, &sid);
-        TRY_SESSION("sid", 1, &sid);
-        TRY_SESSION("noarg", 0, nullptr);
-    } else {
-        snprintf(diag, sizeof(diag), "no_factory:rc=%d", factRc);
+    if (g_sessionRef != nullptr && g_api.getReferenceValue != nullptr) {
+        napi_value cached = nullptr;
+        if (g_api.getReferenceValue(env, g_sessionRef, &cached) == 0 && cached != nullptr) {
+            session = cached;
+            LogLine("[bridge] using cached session obj=%p", reinterpret_cast<void*>(session));
+        }
     }
-#undef TRY_SESSION
-    LogLine("[bridge] diag=%s", diag);
     if (session == nullptr) {
-        nexuslab_linux_hook_send_reply(req->requestId, -6, diag, static_cast<uint32_t>(diagOff));
+        const char* msg = "no session captured yet";
+        LogLine("[bridge] %s", msg);
+        nexuslab_linux_hook_send_reply(req->requestId, -6, msg, static_cast<uint32_t>(strlen(msg)));
         delete req;
         return;
     }
-    ReplyWithObjectKeys(env, req->requestId + 100000, session);
+    napi_value target2 = nullptr;
     {
-        const int propRc = g_api.getNamedProperty(env, session, "sendSSORequest", &target);
-        LogLine("[bridge] sso prop rc=%d fn=%p", propRc, reinterpret_cast<void*>(target));
-        if (propRc != 0 || target == nullptr) {
-            nexuslab_linux_hook_send_reply(req->requestId, -3, "", 0);
+        const int propRc = g_api.getNamedProperty(env, session, "sendSSORequest", &target2);
+        LogLine("[bridge] sso prop rc=%d fn=%p", propRc, reinterpret_cast<void*>(target2));
+        if (propRc != 0 || target2 == nullptr) {
+            ReplyWithObjectKeys(env, req->requestId, session);
             delete req;
             return;
         }
     }
+    target = target2;
     int32_t arity = 2;
     napi_value arityValue = nullptr;
     if (g_api.getNamedProperty(env, target, "length", &arityValue) == 0 && arityValue != nullptr) {
@@ -627,7 +620,19 @@ napi_value ProxyDispatchBySlot(int slotIndex, napi_env env, napi_callback_info i
     LogLine("[proxy] slot#%d batch=%s idx=%zu fn=%p calls=%d",
             slotIndex, slot.batchFirst, slot.index,
             reinterpret_cast<void*>(original), slot.calls.load());
-    return original(env, info);
+    napi_value out = original(env, info);
+    if (slot.name[0] != 0 && g_api.createReference != nullptr) {
+        const bool isSession = (strstr(slot.name, "getNTWrapperSession") != nullptr);
+        if (isSession && out != nullptr) {
+            napi_ref_t fresh = nullptr;
+            if (g_api.createReference(env, out, 1, &fresh) == 0 && fresh != nullptr) {
+                g_sessionRef = fresh;
+                LogLine("[proxy] session captured from %s", slot.name);
+                ReplyWithObjectKeys(env, 999999, out);
+            }
+        }
+    }
+    return out;
 }
 
 template <int N>
