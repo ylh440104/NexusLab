@@ -488,6 +488,86 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
+    if (req->cmd == "__call") {
+        char diag[2048];
+        size_t off = 0;
+        diag[0] = 0;
+        napi_value sess = nullptr;
+        napi_value fn = nullptr;
+        if (g_sessionRef == nullptr || g_api.getReferenceValue(env, g_sessionRef, &sess) != 0 || sess == nullptr) {
+            const char* m = "no session";
+            nexuslab_linux_hook_send_reply(req->requestId, -1, m, static_cast<uint32_t>(strlen(m)));
+            delete req;
+            return;
+        }
+        if (g_api.getNamedProperty(env, sess, "sendSSORequest", &fn) != 0 || fn == nullptr) {
+            const char* m = "no sendSSORequest";
+            nexuslab_linux_hook_send_reply(req->requestId, -1, m, static_cast<uint32_t>(strlen(m)));
+            delete req;
+            return;
+        }
+        const char* errText = nullptr;
+        napi_value argv[3];
+        napi_value obj = nullptr;
+        napi_value buf = nullptr;
+        napi_value str = nullptr;
+        napi_value num = nullptr;
+        g_api.createObject(env, &obj);
+        g_api.createBufferCopy(env, 2, "", nullptr, &buf);
+        g_api.createStringUtf8(env, "trpc.Test.Ping", NAPI_AUTO_LENGTH, &str);
+        g_api.createInt32(env, 0, &num);
+
+        struct Attempt { const char* label; size_t argc; };
+        for (int a = 0; a < 6; ++a) {
+            napi_value out = nullptr;
+            int rc = -1;
+            if (a == 0) {
+                rc = g_api.callFunction(env, sess, fn, 0, nullptr, &out);
+                errText = "noargs";
+            } else if (a == 1) {
+                argv[0] = obj;
+                rc = g_api.callFunction(env, sess, fn, 1, argv, &out);
+                errText = "obj{}";
+            } else if (a == 2) {
+                argv[0] = str;
+                rc = g_api.callFunction(env, sess, fn, 1, argv, &out);
+                errText = "str";
+            } else if (a == 3) {
+                argv[0] = buf;
+                rc = g_api.callFunction(env, sess, fn, 1, argv, &out);
+                errText = "buf";
+            } else if (a == 4) {
+                g_api.setNamedProperty(env, obj, "cmd", str);
+                g_api.setNamedProperty(env, obj, "body", buf);
+                argv[0] = obj;
+                rc = g_api.callFunction(env, sess, fn, 1, argv, &out);
+                errText = "obj{cmd,body}";
+            } else {
+                argv[0] = str;
+                argv[1] = buf;
+                rc = g_api.callFunction(env, sess, fn, 2, argv, &out);
+                errText = "str+buf";
+            }
+            char ex[300];
+            ex[0] = 0;
+            size_t exLen = 0;
+            napi_value exc = nullptr;
+            if (g_api.getLastException != nullptr && g_api.getLastException(env, &exc) == 0 && exc != nullptr) {
+                napi_value es = nullptr;
+                if (g_api.coerceToString != nullptr && g_api.coerceToString(env, exc, &es) == 0 && es != nullptr) {
+                    g_api.getValueStringUtf8(env, es, ex, sizeof(ex) - 1, &exLen);
+                }
+            }
+            off += static_cast<size_t>(snprintf(diag + off, sizeof(diag) - off - 1, "%s=>rc%d:%s|", errText, rc, ex));
+            LogLine("[bridge] call %s rc=%d exc=%s", errText, rc, ex);
+        }
+        (void)num;
+        (void)off;
+        off = strlen(diag);
+        nexuslab_linux_hook_send_reply(req->requestId, 0, diag, static_cast<uint32_t>(off));
+        delete req;
+        return;
+    }
     if (req->cmd == "__deep") {
         napi_value cached = nullptr;
         if (g_sessionRef != nullptr && g_api.getReferenceValue(env, g_sessionRef, &cached) == 0 && cached != nullptr) {
