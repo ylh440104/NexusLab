@@ -390,7 +390,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         napi_value thenProbe = nullptr;
         if (g_api.getNamedProperty(env, result, "then", &thenProbe) == 0 && thenProbe != nullptr) {
             int32_t thenType = -1;
-            if (g_api.typeOf != nullptr && g_api.typeOf(env, thenProbe, &thenType) == 0 && thenType == 6) {
+            if (g_api.typeOf != nullptr && g_api.typeOf(env, thenProbe, &thenType) == 0 && thenType == 7) {
                 isPromise = true;
             }
         }

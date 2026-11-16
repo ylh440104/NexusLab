@@ -81,24 +81,14 @@ static napi_value TargetSendAsync(napi_env env, napi_callback_info info) {
         memcpy(g_last_payload, bodyData, bodyLen);
         g_last_payload[bodyLen] = 0;
     }
-    napi_value promise, resolve, reject;
-    napi_create_promise(env, &promise, &reject);
-    napi_value fn;
-    napi_create_function(env, "resolveWith", NAPI_AUTO_LENGTH, ResolveWith, NULL, &fn);
+    napi_deferred deferred = NULL;
+    napi_value promise = NULL;
+    napi_create_promise(env, &deferred, &promise);
     char ack[320];
     snprintf(ack, sizeof(ack), "async:%s:%zu", cmd, bodyLen);
-    napi_value arg;
-    napi_create_string_utf8(env, ack, NAPI_AUTO_LENGTH, &arg);
-    napi_value global;
-    napi_get_global(env, &global);
-    napi_value callResult;
-    napi_call_function(env, global, fn, 1, &arg, &callResult);
-    napi_value thenFn;
-    napi_get_named_property(env, promise, "then", &thenFn);
-    napi_value resolver;
-    napi_create_function(env, "onThen", NAPI_AUTO_LENGTH, ResolveWith, NULL, &resolver);
-    napi_value chain;
-    napi_call_function(env, promise, thenFn, 1, &resolver, &chain);
+    napi_value resolvedValue = NULL;
+    napi_create_string_utf8(env, ack, NAPI_AUTO_LENGTH, &resolvedValue);
+    napi_resolve_deferred(env, deferred, resolvedValue);
     return promise;
 }
 
