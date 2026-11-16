@@ -9,7 +9,7 @@ const VARIANT = parseInt(process.env.MOCK_VARIANT || '0', 10);
 const EXPECT = {
     0: { body: 'ack:trpc.Roundtrip.Test:10', payload: 'PAYLOAD123', label: 'two-arg' },
     1: { body: 'one:trpc.Roundtrip.Test', payload: '', label: 'one-arg' },
-    2: { body: 'resolved-value', payload: 'PAYLOAD123', label: 'promise' },
+    2: { body: 'async:trpc.Roundtrip.Test:10', payload: 'PAYLOAD123', label: 'promise' },
 };
 const expect = EXPECT[VARIANT];
 
