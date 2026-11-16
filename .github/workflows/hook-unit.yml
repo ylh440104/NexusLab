@@ -22,7 +22,6 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq nodejs-dev libnode-dev 2>/dev/null || true
-          echo "NODE_INC=$(node -p "require('path').dirname(process.execPath)")/../include/node"
           ls /usr/include/node 2>/dev/null | head -3 || echo 'no system headers'
 
       - name: Build mock addon (direct gcc)
@@ -36,24 +35,14 @@ jobs:
             if [ -f "$d/node_api.h" ]; then NODE_INC="$d"; break; fi
           done
           if [ -z "$NODE_INC" ]; then
-            echo 'fetching headers from nodejs.org'
             curl -sSL -o /tmp/node.tar.xz \
               "https://nodejs.org/dist/v20.18.0/node-v20.18.0-headers.tar.xz"
             tar -xJf /tmp/node.tar.xz -C /tmp
             NODE_INC=/tmp/node-v20.18.0/include/node
           fi
           echo "using headers: $NODE_INC"
-          ls "$NODE_INC/node_api.h"
-          gcc -shared -fPIC -O2 -I"$NODE_INC" \
-            -o mock_addon.node mock_addon.c
+          gcc -shared -fPIC -O2 -I"$NODE_INC" -o mock_addon.node mock_addon.c
           ls -la mock_addon.node
-
-      - name: Baseline (no hook)
-        run: |
-          cp /tmp/addon/mock_addon.node "$GITHUB_WORKSPACE/hook-test/"
-          cd "$GITHUB_WORKSPACE/hook-test"
-          echo '=== baseline without hook ==='
-          node test.cjs
 
       - name: Build hook library
         run: |
@@ -62,49 +51,52 @@ jobs:
             -o /tmp/nexuslab-hook.so \
             hook.cc napi_hook.cc inline_hook.cc
           ls -la /tmp/nexuslab-hook.so
+          nm -D /tmp/nexuslab-hook.so | grep nexuslab_linux_hook_send_reply || true
 
-      - name: Hooked run (LD_PRELOAD)
+      - name: Baseline (no hook)
+        run: |
+          cp /tmp/addon/mock_addon.node "$GITHUB_WORKSPACE/hook-test/"
+          cd "$GITHUB_WORKSPACE/hook-test"
+          echo '=== baseline without hook ==='
+          node test.cjs
+
+      - name: Test 1 - interception and passthrough
         run: |
           cd "$GITHUB_WORKSPACE/hook-test"
           rm -f /tmp/nexuslab-napi-hook.log
-          echo '=== hooked run (delay 0, wait window 400ms) ==='
-          NEXUSLAB_HOOK_DELAY_MS=0 HOOK_WAIT_MS=400 timeout 40 env LD_PRELOAD=/tmp/nexuslab-hook.so node test.cjs; RC=$?
-          echo "exit code: $RC"
-          echo
-          echo '=== hook log ==='
-          cat /tmp/nexuslab-napi-hook.log 2>/dev/null || echo '(no log)'
-          echo
-          echo '=== checks ==='
-          grep -q 'proxy' /tmp/nexuslab-napi-hook.log 2>/dev/null \
-            && echo 'PROXY_TRIGGERED' || echo 'PROXY_NOT_TRIGGERED'
-          grep -q 'captured' /tmp/nexuslab-napi-hook.log 2>/dev/null \
-            && echo 'CAPTURE_OK' || echo 'CAPTURE_NONE'
-          exit $RC
+          echo '=== test 1 ==='
+          OUT=$(NEXUSLAB_HOOK_DELAY_MS=0 HOOK_WAIT_MS=400 \
+                timeout 30 env LD_PRELOAD=/tmp/nexuslab-hook.so node test.cjs 2>&1 || true)
+          echo "$OUT"
+          echo "$OUT" | grep -q 'ALL_PASS' || { echo 'TEST1_FAILED'; exit 1; }
+          echo 'TEST1_OK'
+          grep -E 'captured|proxy' /tmp/nexuslab-napi-hook.log | tail -6
 
-      - name: Protocol frame test (socket)
+      - name: Test 2 - protocol frames
         run: |
           cd "$GITHUB_WORKSPACE/hook-test"
           rm -rf /tmp/nlrt && mkdir -p /tmp/nlrt
-          export NEXUSLAB_RUNTIME_DIR=/tmp/nlrt
-          export NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt
-          export NEXUSLAB_HOOK_DELAY_MS=0
-          echo '=== protocol test ==='
-          timeout 40 env LD_PRELOAD=/tmp/nexuslab-hook.so node protocol_test.cjs; RC=$?
-          echo "protocol exit: $RC"
-          echo '=== sockets created ==='
-          ls -la /tmp/nlrt/ 2>/dev/null || echo '(none)'
-          exit $RC
+          rm -f /tmp/proto_trace.log
+          echo '=== test 2 ==='
+          OUT=$(NEXUSLAB_RUNTIME_DIR=/tmp/nlrt NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt \
+                NEXUSLAB_HOOK_DELAY_MS=0 \
+                timeout 30 env LD_PRELOAD=/tmp/nexuslab-hook.so node protocol_test.cjs 2>&1 || true)
+          echo "$OUT"
+          echo '--- proto trace ---'
+          cat /tmp/proto_trace.log 2>/dev/null || true
+          echo "$OUT" | grep -q 'PROTOCOL_ALL_PASS' || { echo 'TEST2_FAILED'; exit 1; }
+          echo 'TEST2_OK'
 
-      - name: E2E bridge roundtrip
+      - name: Test 3 - end to end bridge roundtrip
         run: |
           cd "$GITHUB_WORKSPACE/hook-test"
           rm -rf /tmp/nlrt2 && mkdir -p /tmp/nlrt2
-          export NEXUSLAB_RUNTIME_DIR=/tmp/nlrt2
-          export NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt2
-          export NEXUSLAB_HOOK_DELAY_MS=0
-          echo '=== e2e bridge test ==='
-          timeout 40 env LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs; RC=$?
-          echo "e2e exit: $RC"
-          echo '=== bridge log ==='
-          echo '--- proto trace ---'; cat /tmp/proto_trace.log 2>/dev/null; echo '--- bridge log ---'; grep -E 'bridge|sender|proxy' /tmp/nexuslab-napi-hook.log 2>/dev/null | tail -20; echo '--- end ---'
-          exit $RC
+          echo '=== test 3 ==='
+          OUT=$(NEXUSLAB_RUNTIME_DIR=/tmp/nlrt2 NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt2 \
+                NEXUSLAB_HOOK_DELAY_MS=0 \
+                timeout 30 env LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs 2>&1 || true)
+          echo "$OUT"
+          echo '--- bridge log ---'
+          grep -E 'bridge|sender' /tmp/nexuslab-napi-hook.log 2>/dev/null | tail -12 || true
+          echo "$OUT" | grep -q 'E2E_ALL_PASS' || { echo 'TEST3_FAILED'; exit 1; }
+          echo 'TEST3_OK'
