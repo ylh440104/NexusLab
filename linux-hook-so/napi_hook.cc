@@ -277,11 +277,27 @@ void DeepEnumerate(napi_env env, uint32_t requestId, napi_value obj) {
     char buf[4096];
     size_t off = 0;
     buf[0] = 0;
+    int32_t objType = -1;
+    if (g_api.typeOf != nullptr && obj != nullptr) {
+        g_api.typeOf(env, obj, &objType);
+    }
+    char selfDesc[400];
+    selfDesc[0] = 0;
+    size_t selfLen = 0;
+    if (obj != nullptr && g_api.coerceToString != nullptr) {
+        napi_value asStr = nullptr;
+        if (g_api.coerceToString(env, obj, &asStr) == 0 && asStr != nullptr) {
+            g_api.getValueStringUtf8(env, asStr, selfDesc, sizeof(selfDesc) - 1, &selfLen);
+        }
+    }
+    LogLine("[bridge] session type=%d str=%.200s", objType, selfDesc);
     napi_value cur = obj;
     int depth = 0;
     while (cur != nullptr && depth < 4 && off + 200 < sizeof(buf)) {
         napi_value names = nullptr;
-        if (g_api.getPropertyNames != nullptr && g_api.getPropertyNames(env, cur, &names) == 0 && names != nullptr) {
+        const int namesRc = (g_api.getPropertyNames != nullptr) ? g_api.getPropertyNames(env, cur, &names) : -99;
+        LogLine("[bridge] names rc=%d depth=%d", namesRc, depth);
+        if (namesRc == 0 && names != nullptr) {
             uint32_t len = 0;
             g_api.getArrayLength(env, names, &len);
             off += static_cast<size_t>(snprintf(buf + off, sizeof(buf) - off - 1, "[L%d(%u)", depth, len));
