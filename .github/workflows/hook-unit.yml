@@ -87,16 +87,34 @@ jobs:
           echo "$OUT" | grep -q 'PROTOCOL_ALL_PASS' || { echo 'TEST2_FAILED'; exit 1; }
           echo 'TEST2_OK'
 
-      - name: Test 3 - end to end bridge roundtrip
+      - name: Test 3a - e2e two-arg target
         run: |
           cd "$GITHUB_WORKSPACE/hook-test"
           rm -rf /tmp/nlrt2 && mkdir -p /tmp/nlrt2
-          echo '=== test 3 ==='
-          OUT=$(NEXUSLAB_RUNTIME_DIR=/tmp/nlrt2 NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt2 \
-                NEXUSLAB_HOOK_DELAY_MS=0 \
-                timeout 30 env LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs 2>&1 || true)
+          echo '=== test 3 variant 0 (two-arg) ==='
+          OUT=$(MOCK_VARIANT=0 NEXUSLAB_RUNTIME_DIR=/tmp/nlrt2 NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt2                 NEXUSLAB_HOOK_DELAY_MS=0                 timeout 30 env LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs 2>&1 || true)
+          echo "$OUT"
+          echo "$OUT" | grep -q 'E2E_ALL_PASS' || { echo 'TEST3A_FAILED'; exit 1; }
+          echo 'TEST3A_OK'
+
+      - name: Test 3b - e2e one-arg target
+        run: |
+          cd "$GITHUB_WORKSPACE/hook-test"
+          rm -rf /tmp/nlrt2 && mkdir -p /tmp/nlrt2
+          echo '=== test 3 variant 1 (one-arg) ==='
+          OUT=$(MOCK_VARIANT=1 NEXUSLAB_RUNTIME_DIR=/tmp/nlrt2 NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt2                 NEXUSLAB_HOOK_DELAY_MS=0                 timeout 30 env LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs 2>&1 || true)
+          echo "$OUT"
+          echo "$OUT" | grep -q 'E2E_ALL_PASS' || { echo 'TEST3B_FAILED'; exit 1; }
+          echo 'TEST3B_OK'
+
+      - name: Test 3c - e2e promise target
+        run: |
+          cd "$GITHUB_WORKSPACE/hook-test"
+          rm -rf /tmp/nlrt2 && mkdir -p /tmp/nlrt2
+          echo '=== test 3 variant 2 (promise) ==='
+          OUT=$(MOCK_VARIANT=2 NEXUSLAB_RUNTIME_DIR=/tmp/nlrt2 NEXUSLAB_HOOK_RUNTIME_DIR=/tmp/nlrt2                 NEXUSLAB_HOOK_DELAY_MS=0                 timeout 30 env LD_PRELOAD=/tmp/nexuslab-hook.so node e2e_bridge.cjs 2>&1 || true)
           echo "$OUT"
           echo '--- bridge log ---'
           grep -E 'bridge|sender' /tmp/nexuslab-napi-hook.log 2>/dev/null | tail -12 || true
-          echo "$OUT" | grep -q 'E2E_ALL_PASS' || { echo 'TEST3_FAILED'; exit 1; }
-          echo 'TEST3_OK'
+          echo "$OUT" | grep -q 'E2E_ALL_PASS' || { echo 'TEST3C_FAILED'; exit 1; }
+          echo 'TEST3C_OK'

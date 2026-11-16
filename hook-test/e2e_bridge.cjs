@@ -1,10 +1,17 @@
 const net = require('net');
 const path = require('path');
-const fs = require('fs');
 
 const RUNTIME_DIR = process.env.NEXUSLAB_RUNTIME_DIR;
 const PID = process.pid;
 const CONTROL = path.join(RUNTIME_DIR, 'mojo.' + PID + '.control.sock');
+const VARIANT = parseInt(process.env.MOCK_VARIANT || '0', 10);
+
+const EXPECT = {
+    0: { body: 'ack:trpc.Roundtrip.Test:10', payload: 'PAYLOAD123', label: 'two-arg' },
+    1: { body: 'one:trpc.Roundtrip.Test', payload: '', label: 'one-arg' },
+    2: { body: 'resolved-value', payload: 'PAYLOAD123', label: 'promise' },
+};
+const expect = EXPECT[VARIANT];
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -38,6 +45,7 @@ async function pump(ms) {
 async function main() {
     const addon = require('./mock_addon.node');
     check('addon loaded', typeof addon === 'object');
+    console.log('variant: ' + expect.label);
 
     const frames = [];
     let pending = Buffer.alloc(0);
@@ -63,49 +71,29 @@ async function main() {
     await pump(700);
     check('hello received', frames.some(f => f.op === 1));
 
-    console.log('--- A: two-arg target ---');
-    addon.setVariant(0);
-    await pump(50);
-    let before = frames.length;
-    sock.write(buildFrame(2, 101, 1, 'trpc.Two.Arg', Buffer.from('PAYLOAD123')));
-    await pump(700);
-    let reply = frames.slice(before).find(f => f.op === 4 && f.reqId === 101);
-    check('A reply received', !!reply);
-    if (reply) {
-        check('A reply body', reply.body.toString('utf8') === 'ack:trpc.Two.Arg:10',
-              JSON.stringify(reply.body.toString('utf8')));
-    }
-    let stats = addon.getStats();
-    check('A target executed', stats.targetCalls >= 1, 'calls=' + stats.targetCalls);
-    check('A payload delivered', stats.lastPayload === 'PAYLOAD123', JSON.stringify(stats.lastPayload));
-
-    console.log('--- B: one-arg target (arity adaptation) ---');
-    addon.setVariant(1);
-    await pump(50);
-    before = frames.length;
-    sock.write(buildFrame(2, 102, 1, 'trpc.One.Arg', Buffer.from('ignored')));
-    await pump(700);
-    reply = frames.slice(before).find(f => f.op === 4 && f.reqId === 102);
-    check('B reply received', !!reply);
-    if (reply) {
-        const body = reply.body.toString('utf8');
-        check('B uses one-arg function', body === 'one:trpc.One.Arg', JSON.stringify(body));
-    }
-
-    console.log('--- C: promise target ---');
-    addon.setVariant(2);
-    await pump(50);
-    before = frames.length;
-    sock.write(buildFrame(2, 103, 1, 'trpc.Promise', Buffer.from('abc')));
+    const before = frames.length;
+    const reqId = 200 + VARIANT;
+    sock.write(buildFrame(2, reqId, 1, 'trpc.Roundtrip.Test', Buffer.from('PAYLOAD123')));
     await pump(900);
-    reply = frames.slice(before).find(f => f.op === 4 && f.reqId === 103);
-    check('C reply received (async resolved)', !!reply);
+
+    const ack = frames.slice(before).find(f => f.op === 3 && f.reqId === reqId);
+    check('send ack', !!ack);
+
+    const reply = frames.slice(before).find(f => f.op === 4 && f.reqId === reqId);
+    check('reply received', !!reply);
     if (reply) {
-        check('C reply body', reply.body.toString('utf8') === 'resolved-value',
+        check('reply body', reply.body.toString('utf8') === expect.body,
               JSON.stringify(reply.body.toString('utf8')));
     }
 
-    await pump(150);
+    const stats = addon.getStats();
+    check('target executed', stats.targetCalls >= 1, 'calls=' + stats.targetCalls);
+    if (expect.payload) {
+        check('payload delivered', stats.lastPayload === expect.payload,
+              JSON.stringify(stats.lastPayload));
+    }
+
+    await pump(120);
     sock.destroy();
     console.log(failures === 0 ? 'E2E_ALL_PASS' : 'E2E_FAILURES=' + failures);
     setTimeout(() => process.exit(failures === 0 ? 0 : 1), 100);

@@ -1,6 +1,7 @@
 #include <node_api.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static int g_target_calls = 0;
 static char g_last_payload[256];
@@ -151,15 +152,23 @@ static napi_value SetVariant(napi_env env, napi_callback_info info) {
 }
 
 static napi_value Init(napi_env env, napi_value exports) {
+    const char* variant = getenv("MOCK_VARIANT");
+    int mode = 0;
+    if (variant != NULL && variant[0] != 0) {
+        mode = atoi(variant);
+    }
+    napi_callback target = TargetSend;
+    if (mode == 1) {
+        target = TargetSendOneArg;
+    } else if (mode == 2) {
+        target = TargetSendAsync;
+    }
     napi_property_descriptor props[] = {
-        { "SendSSORequestInternal", NULL, TargetSend, NULL, NULL, NULL, napi_default, NULL },
-        { "SendSSORequestOne", NULL, TargetSendOneArg, NULL, NULL, NULL, napi_default, NULL },
-        { "SendSSORequestAsync", NULL, TargetSendAsync, NULL, NULL, NULL, napi_default, NULL },
+        { "SendSSORequestInternal", NULL, target, NULL, NULL, NULL, napi_default, NULL },
         { "RecvPacket", NULL, TargetRecv, NULL, NULL, NULL, napi_default, NULL },
         { "getStats", NULL, GetStats, NULL, NULL, NULL, napi_default, NULL },
-        { "setVariant", NULL, SetVariant, NULL, NULL, NULL, napi_default, NULL },
     };
-    napi_define_properties(env, exports, 6, props);
+    napi_define_properties(env, exports, 3, props);
     napi_create_reference(env, exports, 1, &g_exportsRef);
     return exports;
 }
