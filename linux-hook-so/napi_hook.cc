@@ -339,7 +339,34 @@ napi_value PromiseThenHandler(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 std::atomic<napi_threadsafe_function> g_sendTsfn{nullptr};
+constexpr int kMaxCaptureSlots = 512;
+
+struct CaptureSlot {
+    napi_callback original;
+    void* userData;
+    const char* batchFirst;
+    size_t index;
+    std::atomic<int> calls;
+    char name[96];
+};
+
+CaptureSlot g_captureTable[kMaxCaptureSlots];
+std::atomic<int> g_captureSlots{0};
+
 napi_ref_t g_exportsRef = nullptr;
+
+napi_value ExportsValue(napi_env env) {
+    if (g_exportsRef == nullptr || g_api.getReferenceValue == nullptr) {
+        return nullptr;
+    }
+    napi_value out = nullptr;
+    if (g_api.getReferenceValue(env, g_exportsRef, &out) != 0) {
+        return nullptr;
+    }
+    return out;
+}
+
+
 std::atomic<bool> g_bridgeAlive{false};
 
 napi_value NewBridgeJsCallback(napi_env env, napi_callback_info info) {
@@ -393,61 +420,64 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
+    if (req->cmd == "__names") {
+        char buf[6144];
+        size_t off = 0;
+        buf[0] = 0;
+        const int total = g_captureSlots.load();
+        for (int i = 0; i < total && off + 140 < sizeof(buf); ++i) {
+            const CaptureSlot& s = g_captureTable[i];
+            if (s.name[0] == 0) {
+                continue;
+            }
+            off += static_cast<size_t>(snprintf(buf + off, sizeof(buf) - off - 1, "%d:%s;", i, s.name));
+        }
+        LogLine("[bridge] names total=%d", total);
+        nexuslab_linux_hook_send_reply(req->requestId, 0, buf, static_cast<uint32_t>(off));
+        delete req;
+        return;
+    }
+    if (req->cmd == "__enum") {
+        ReplyWithObjectKeys(env, req->requestId, g_exportsRef != nullptr ? ExportsValue(env) : nullptr);
+        delete req;
+        return;
+    }
+    napi_value exportsObj = ExportsValue(env);
+    if (exportsObj == nullptr) {
+        LogLine("[bridge] exports handle missing");
+        nexuslab_linux_hook_send_reply(req->requestId, -9, "", 0);
+        delete req;
+        return;
+    }
     napi_value factory = nullptr;
-    const int factRc = g_api.getNamedProperty(env, exports, "getNTWrapperSession", &factory);
+    const int factRc = g_api.getNamedProperty(env, exportsObj, "getNTWrapperSession", &factory);
     LogLine("[bridge] factory rc=%d fn=%p", factRc, reinterpret_cast<void*>(factory));
     napi_value session = nullptr;
+    char diag[512];
+    diag[0] = 0;
+    size_t diagOff = 0;
+#define TRY_SESSION(label, argcExpr, argsExpr)     do {         napi_value tryObj = nullptr;         const int tryRc = g_api.callFunction(env, exportsObj, factory, (argcExpr), (argsExpr), &tryObj);         LogLine("[bridge] try %s rc=%d obj=%p", label, tryRc, reinterpret_cast<void*>(tryObj));         diagOff += static_cast<size_t>(snprintf(diag + diagOff, sizeof(diag) - diagOff, "%s:rc=%d", label, tryRc));         if (tryRc == 0 && tryObj != nullptr && session == nullptr) {             session = tryObj;         }         if (tryRc != 0 && g_api.getLastException != nullptr) {             napi_value exc = nullptr;             g_api.getLastException(env, &exc);             char ex[200];             ex[0] = 0;             size_t exLen = 0;             if (exc != nullptr && g_api.coerceToString != nullptr) {                 napi_value es = nullptr;                 if (g_api.coerceToString(env, exc, &es) == 0 && es != nullptr) {                     g_api.getValueStringUtf8(env, es, ex, sizeof(ex) - 1, &exLen);                 }             }             LogLine("[bridge] try %s exc=%s", label, ex);             diagOff += static_cast<size_t>(snprintf(diag + diagOff, sizeof(diag) - diagOff, "(%s)", ex));         }     } while (0)
+
     if (factRc == 0 && factory != nullptr) {
-        int32_t factArity = 1;
-        napi_value lenValue = nullptr;
-        if (g_api.getNamedProperty(env, factory, "length", &lenValue) == 0 && lenValue != nullptr) {
-            int32_t parsed = 0;
-            if (g_api.getValueInt32(env, lenValue, &parsed) == 0 && parsed >= 1 && parsed <= 3) {
-                factArity = parsed;
-            }
-        }
         napi_value sid = nullptr;
         g_api.createStringUtf8(env, "nt_1", NAPI_AUTO_LENGTH, &sid);
-        napi_value undef = nullptr;
-        g_api.getUndefined(env, &undef);
-        napi_value factoryArgs[3];
-        size_t factoryArgc = 0;
-        if (factArity >= 1 && sid != nullptr) {
-            factoryArgs[factoryArgc++] = sid;
-        }
-        if (factArity >= 2) {
-            factoryArgs[factoryArgc++] = undef;
-        }
-        if (factArity >= 3) {
-            factoryArgs[factoryArgc++] = undef;
-        }
-        LogLine("[bridge] factory arity=%d", factArity);
-        const int sessRc = g_api.callFunction(env, exports, factory, factoryArgc, factoryArgc > 0 ? factoryArgs : nullptr, &session);
-        LogLine("[bridge] session rc=%d obj=%p", sessRc, reinterpret_cast<void*>(session));
-        if (sessRc != 0) {
-            ReplyWithException(env, req->requestId);
-            delete req;
-            return;
-        }
-        int32_t sessionType = -1;
-        if (session != nullptr) {
-            g_api.typeOf(env, session, &sessionType);
-        }
-        LogLine("[bridge] session type=%d", sessionType);
-        ReplyWithObjectKeys(env, req->requestId + 100000, session);
+        TRY_SESSION("sid", 1, &sid);
+        TRY_SESSION("noarg", 0, nullptr);
+    } else {
+        snprintf(diag, sizeof(diag), "no_factory:rc=%d", factRc);
     }
-    if (session != nullptr) {
+#undef TRY_SESSION
+    LogLine("[bridge] diag=%s", diag);
+    if (session == nullptr) {
+        nexuslab_linux_hook_send_reply(req->requestId, -6, diag, static_cast<uint32_t>(diagOff));
+        delete req;
+        return;
+    }
+    ReplyWithObjectKeys(env, req->requestId + 100000, session);
+    {
         const int propRc = g_api.getNamedProperty(env, session, "sendSSORequest", &target);
         LogLine("[bridge] sso prop rc=%d fn=%p", propRc, reinterpret_cast<void*>(target));
         if (propRc != 0 || target == nullptr) {
-            nexuslab_linux_hook_send_reply(req->requestId, -3, "", 0);
-            delete req;
-            return;
-        }
-    } else {
-        const int propRc = g_api.getNamedProperty(env, exports, "SendSSORequestInternal", &target);
-        if (propRc != 0 || target == nullptr) {
-            LogLine("[bridge] target property missing rc=%d", propRc);
             nexuslab_linux_hook_send_reply(req->requestId, -3, "", 0);
             delete req;
             return;
@@ -534,20 +564,9 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     }
     delete req;
 }
-constexpr int kMaxCaptureSlots = 512;
 
 
 
-struct CaptureSlot {
-    napi_callback original;
-    void* userData;
-    const char* batchFirst;
-    size_t index;
-    std::atomic<int> calls;
-};
-
-CaptureSlot g_captureTable[kMaxCaptureSlots];
-std::atomic<int> g_captureSlots{0};
 
 CaptureSlot* FindSlotByOriginal(void* original) {
     for (int i = 0; i < g_captureSlots.load(); ++i) {
@@ -1177,6 +1196,10 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
                 slot.userData = writable[i].data;
                 slot.batchFirst = (first != nullptr && reinterpret_cast<uintptr_t>(first) > 0x10000) ? first : "";
                 slot.index = i;
+                slot.name[0] = 0;
+                if (writable[i].utf8name != nullptr) {
+                    snprintf(slot.name, sizeof(slot.name), "%s", writable[i].utf8name);
+                }
                 writable[i].method = g_captureSlots.load() < 512 ? kProxyTable[g_captureSlots.load()] : writable[i].method;
                 g_captureSlots.fetch_add(1);
             }
