@@ -437,6 +437,7 @@ std::atomic<int> g_namedCount{0};
 SetNamedPropertyFn g_origSetNamedProperty = nullptr;
 napi_ref_t g_ssoOwnerRef = nullptr;
 napi_ref_t g_ssoFnRef = nullptr;
+std::atomic<int> g_ssoValueType{-1};
 
 int HookedSetNamedProperty(napi_env env, napi_value object, const char* utf8name, napi_value value) {
     if (g_origSetNamedProperty == nullptr) {
@@ -451,7 +452,11 @@ int HookedSetNamedProperty(napi_env env, napi_value object, const char* utf8name
             rec.owner = reinterpret_cast<void*>(object);
             g_namedCount.fetch_add(1);
             LogLine("[named] %s", utf8name);
-            if (strstr(utf8name, "sendSSO") != nullptr && g_api.createReference != nullptr) {
+            if (strstr(utf8name, "sendSSO") != nullptr && g_api.createReference != nullptr && g_api.typeOf != nullptr) {
+                int32_t vtype = -1;
+                g_api.typeOf(env, value, &vtype);
+                g_ssoValueType.store(vtype);
+                LogLine("[named] sendSSO value type=%d", vtype);
                 napi_ref_t objRef = nullptr;
                 napi_ref_t fnRef = nullptr;
                 if (g_api.createReference(env, object, 1, &objRef) == 0 && objRef != nullptr) {
@@ -548,7 +553,19 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         }
         g_api.getReferenceValue(env, g_ssoOwnerRef, &owner);
         g_api.getReferenceValue(env, g_ssoFnRef, &fn);
-        LogLine("[try] owner=%p fn=%p", reinterpret_cast<void*>(owner), reinterpret_cast<void*>(fn));
+        int32_t fnType = -1;
+        if (fn != nullptr && g_api.typeOf != nullptr) {
+            g_api.typeOf(env, fn, &fnType);
+        }
+        LogLine("[try] owner=%p fn=%p type=%d", reinterpret_cast<void*>(owner), reinterpret_cast<void*>(fn), fnType);
+        if (fnType != 7) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "captured value is not a function (type=%d)", fnType);
+            LogLine("[try] %s", msg);
+            nexuslab_linux_hook_send_reply(req->requestId, -2, msg, static_cast<uint32_t>(strlen(msg)));
+            delete req;
+            return;
+        }
         napi_value obj = nullptr;
         napi_value buf = nullptr;
         napi_value str = nullptr;
