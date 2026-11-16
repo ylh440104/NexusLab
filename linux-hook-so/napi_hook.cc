@@ -471,7 +471,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
-    if (req->cmd == "__names") {
+    if (strcmp(req->cmd, "__names") == 0) {
         char buf[6144];
         size_t off = 0;
         buf[0] = 0;
@@ -488,7 +488,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
-    if (req->cmd == "__call") {
+    if (strcmp(req->cmd, "__call") == 0) {
         char diag[2048];
         size_t off = 0;
         diag[0] = 0;
@@ -568,7 +568,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
-    if (req->cmd == "__deep") {
+    if (strcmp(req->cmd, "__deep") == 0) {
         napi_value cached = nullptr;
         if (g_sessionRef != nullptr && g_api.getReferenceValue(env, g_sessionRef, &cached) == 0 && cached != nullptr) {
             DeepEnumerate(env, req->requestId, cached);
@@ -579,7 +579,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
-    if (req->cmd == "__src") {
+    if (strcmp(req->cmd, "__src") == 0) {
         napi_value cached = nullptr;
         napi_value fn = nullptr;
         if (g_sessionRef != nullptr && g_api.getReferenceValue(env, g_sessionRef, &cached) == 0 && cached != nullptr) {
@@ -589,7 +589,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
-    if (req->cmd == "__enum") {
+    if (strcmp(req->cmd, "__enum") == 0) {
         ReplyWithObjectKeys(env, req->requestId, g_exportsRef != nullptr ? ExportsValue(env) : nullptr);
         delete req;
         return;
