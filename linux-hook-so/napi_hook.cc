@@ -75,6 +75,7 @@ typedef int (*GetTypedarrayInfoFn)(napi_env, int, napi_value, size_t*, void**, v
 typedef int (*IsTypedarrayFn)(napi_env, napi_value, bool*);
 
 typedef void (*ThrowErrorFn)(napi_env, const char*, const char*);
+typedef int (*IsPromiseFn)(napi_env, napi_value, bool*);
 typedef int (*GetUndefinedFn)(napi_env, napi_value*);
 typedef struct {
     const char* utf8name;
@@ -127,6 +128,7 @@ struct NapiApi {
     CallFunctionFn callFunction = nullptr;
     CreateBufferCopyFn createBufferCopy = nullptr;
     GetUndefinedFn getUndefined = nullptr;
+    IsPromiseFn isPromise = nullptr;
     OpenHandleScopeFn openHandleScope = nullptr;
     CloseHandleScopeFn closeHandleScope = nullptr;
 };
@@ -187,6 +189,7 @@ bool LoadNapiApi() {
     NEXUS_BIND(callFunction, "napi_call_function")
     NEXUS_BIND(createBufferCopy, "napi_create_buffer_copy")
     NEXUS_BIND(getUndefined, "napi_get_undefined")
+    NEXUS_BIND(isPromise, "napi_is_promise")
     NEXUS_BIND(openHandleScope, "napi_open_handle_scope")
     NEXUS_BIND(closeHandleScope, "napi_close_handle_scope")
 
@@ -256,6 +259,27 @@ struct SendBridgeRequest {
     std::string body;
 };
 
+void ReplyWithValue(napi_env env, uint32_t requestId, napi_value value, int32_t status) {
+    char buf[1024];
+    buf[0] = 0;
+    size_t len = 0;
+    if (value != nullptr && g_api.getValueStringUtf8 != nullptr) {
+        g_api.getValueStringUtf8(env, value, buf, sizeof(buf) - 1, &len);
+    }
+    LogLine("[bridge] reply reqId=%u status=%d body=%s", requestId, status, buf);
+    nexuslab_linux_hook_send_reply(requestId, status, buf, static_cast<uint32_t>(len));
+}
+
+napi_value PromiseThenHandler(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    void* data = nullptr;
+    g_api.getCbInfo(env, info, &argc, argv, nullptr, &data);
+    const uint32_t requestId = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(data));
+    napi_value value = argc > 0 ? argv[0] : nullptr;
+    ReplyWithValue(env, requestId, value, 0);
+    return nullptr;
+}
 std::atomic<napi_threadsafe_function> g_sendTsfn{nullptr};
 napi_ref_t g_exportsRef = nullptr;
 std::atomic<bool> g_bridgeAlive{false};
@@ -304,30 +328,81 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     if (g_api.createBufferCopy != nullptr && !req->body.empty()) {
         g_api.createBufferCopy(env, req->body.size(), req->body.data(), nullptr, &argv[1]);
     }
-    size_t argc = argv[1] != nullptr ? 2 : 1;
     napi_value target = nullptr;
     if (g_api.getNamedProperty == nullptr) {
         LogLine("[bridge] getNamedProperty missing");
+        nexuslab_linux_hook_send_reply(req->requestId, -7, "", 0);
         delete req;
         return;
     }
     const int propRc = g_api.getNamedProperty(env, exports, "SendSSORequestInternal", &target);
     if (propRc != 0 || target == nullptr) {
         LogLine("[bridge] target property missing rc=%d", propRc);
+        nexuslab_linux_hook_send_reply(req->requestId, -3, "", 0);
         delete req;
         return;
     }
-    napi_value result = nullptr;
-    const int rc = g_api.callFunction(env, exports, target, argc, argv, &result);
-    LogLine("[bridge] call rc=%d", rc);
-    if (rc == 0 && result != nullptr && g_api.getValueStringUtf8 != nullptr) {
-        char reply[512];
-        reply[0] = 0;
-        size_t copied = 0;
-        if (g_api.getValueStringUtf8(env, result, reply, sizeof(reply) - 1, &copied) == 0) {
-            LogLine("[bridge] result=%s", reply);
-            nexuslab_linux_hook_send_reply(req->requestId, 0, reply, static_cast<uint32_t>(copied));
+    int32_t arity = 2;
+    napi_value arityValue = nullptr;
+    if (g_api.getNamedProperty(env, target, "length", &arityValue) == 0 && arityValue != nullptr) {
+        int32_t parsed = 0;
+        if (g_api.getValueInt32(env, arityValue, &parsed) == 0 && parsed >= 0 && parsed <= 3) {
+            arity = parsed;
         }
+    }
+    LogLine("[bridge] target arity=%d", arity);
+    napi_value callArgs[3];
+    size_t callArgc = 0;
+    if (arity >= 1) {
+        napi_value cmdValue = nullptr;
+        if (g_api.createStringUtf8(env, req->cmd, NAPI_AUTO_LENGTH, &cmdValue) != 0 || cmdValue == nullptr) {
+            LogLine("[bridge] cmd string failed");
+            nexuslab_linux_hook_send_reply(req->requestId, -3, "", 0);
+            delete req;
+            return;
+        }
+        callArgs[callArgc++] = cmdValue;
+    }
+    if (arity >= 2) {
+        napi_value bodyValue = nullptr;
+        if (g_api.createBufferCopy != nullptr) {
+            g_api.createBufferCopy(env, req->body.size(), req->body.empty() ? "" : req->body.data(), nullptr, &bodyValue);
+        }
+        callArgs[callArgc++] = bodyValue != nullptr ? bodyValue : undefined;
+    }
+    if (arity >= 3) {
+        callArgs[callArgc++] = undefined;
+    }
+    napi_value result = nullptr;
+    const int rc = g_api.callFunction(env, exports, target, callArgc, callArgs, &result);
+    LogLine("[bridge] call rc=%d argc=%zu", rc, callArgc);
+    if (rc != 0) {
+        nexuslab_linux_hook_send_reply(req->requestId, -4, "", 0);
+        delete req;
+        return;
+    }
+    bool isPromise = false;
+    if (g_api.isPromise != nullptr && result != nullptr) {
+        g_api.isPromise(env, result, &isPromise);
+    }
+    if (isPromise) {
+        LogLine("[bridge] promise detected, attaching then");
+        napi_value thenFn = nullptr;
+        napi_value handler = nullptr;
+        if (g_api.getNamedProperty(env, result, "then", &thenFn) == 0 && thenFn != nullptr &&
+            g_api.createFunction != nullptr &&
+            g_api.createFunction(env, "nexuslabThen", NAPI_AUTO_LENGTH, &PromiseThenHandler,
+                                 reinterpret_cast<void*>(static_cast<uintptr_t>(req->requestId)), &handler) == 0 &&
+            handler != nullptr) {
+            napi_value chained = nullptr;
+            g_api.callFunction(env, result, thenFn, 1, &handler, &chained);
+            LogLine("[bridge] then attached");
+        } else {
+            LogLine("[bridge] then attach failed");
+            nexuslab_linux_hook_send_reply(req->requestId, -5, "", 0);
+        }
+    } else {
+        ReplyWithValue(env, req->requestId, result, 0);
     }
     delete req;
 }

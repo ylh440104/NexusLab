@@ -28,18 +28,24 @@ function buildFrame(op, requestId, flags, cmd, body) {
     return Buffer.concat([h, cmdBuf, bodyBuf]);
 }
 
+async function pump(ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+        await new Promise(r => setTimeout(r, 25));
+    }
+}
+
 async function main() {
     const addon = require('./mock_addon.node');
     check('addon loaded', typeof addon === 'object');
 
-    const sock = net.createConnection(CONTROL);
-    let pending = Buffer.alloc(0);
     const frames = [];
+    let pending = Buffer.alloc(0);
+    const sock = net.createConnection(CONTROL);
     sock.on('data', (chunk) => {
         pending = Buffer.concat([pending, chunk]);
         while (pending.length >= 40) {
-            const magic = pending.slice(0, 4).toString('ascii');
-            if (magic !== 'QHP1') { pending = Buffer.alloc(0); break; }
+            if (pending.slice(0, 4).toString('ascii') !== 'QHP1') { pending = Buffer.alloc(0); break; }
             const op = pending.readUInt16LE(6);
             const reqId = pending.readUInt32LE(8);
             const status = pending.readInt32LE(12);
@@ -50,35 +56,59 @@ async function main() {
             pending = pending.slice(total);
             frames.push({ op, reqId, status, body });
             console.log('  frame: op=' + op + ' reqId=' + reqId +
-                        ' status=' + status + ' body=' + JSON.stringify(body.toString('utf8').slice(0, 40)));
+                        ' status=' + status + ' body=' + JSON.stringify(body.toString('utf8').slice(0, 50)));
         }
     });
 
-    await new Promise(r => setTimeout(r, 800));
+    await pump(700);
     check('hello received', frames.some(f => f.op === 1));
 
-    console.log('--- roundtrip: send op=2, expect real function executed ---');
-    const before = frames.length;
-    const reqId = 9001;
-    sock.write(buildFrame(2, reqId, 1, 'trpc.Roundtrip.Test', Buffer.from('PAYLOAD123')));
+    console.log('--- A: two-arg target ---');
+    addon.setVariant(0);
+    await pump(50);
+    let before = frames.length;
+    sock.write(buildFrame(2, 101, 1, 'trpc.Two.Arg', Buffer.from('PAYLOAD123')));
+    await pump(700);
+    let reply = frames.slice(before).find(f => f.op === 4 && f.reqId === 101);
+    check('A reply received', !!reply);
+    if (reply) {
+        check('A reply body', reply.body.toString('utf8') === 'ack:trpc.Two.Arg:10',
+              JSON.stringify(reply.body.toString('utf8')));
+    }
+    let stats = addon.getStats();
+    check('A target executed', stats.targetCalls >= 1, 'calls=' + stats.targetCalls);
+    check('A payload delivered', stats.lastPayload === 'PAYLOAD123', JSON.stringify(stats.lastPayload));
 
-    for (let i = 0; i < 24; i++) {
-        await new Promise(r => setTimeout(r, 50));
+    console.log('--- B: one-arg target (arity adaptation) ---');
+    addon.setVariant(1);
+    await pump(50);
+    before = frames.length;
+    sock.write(buildFrame(2, 102, 1, 'trpc.One.Arg', Buffer.from('ignored')));
+    await pump(700);
+    reply = frames.slice(before).find(f => f.op === 4 && f.reqId === 102);
+    check('B reply received', !!reply);
+    if (reply) {
+        const body = reply.body.toString('utf8');
+        check('B uses one-arg function', body === 'one:trpc.One.Arg', JSON.stringify(body));
     }
 
-    const ack = frames.slice(before).find(f => f.op === 3 && f.reqId === reqId);
-    check('send ack (op=3)', !!ack);
+    console.log('--- C: promise target ---');
+    addon.setVariant(2);
+    await pump(50);
+    before = frames.length;
+    sock.write(buildFrame(2, 103, 1, 'trpc.Promise', Buffer.from('abc')));
+    await pump(900);
+    reply = frames.slice(before).find(f => f.op === 4 && f.reqId === 103);
+    check('C reply received (async resolved)', !!reply);
+    if (reply) {
+        check('C reply body', reply.body.toString('utf8') === 'resolved-value',
+              JSON.stringify(reply.body.toString('utf8')));
+    }
 
-    const after = addon.getStats();
-    check('target function executed by bridge', after.targetCalls >= 1,
-          'calls=' + after.targetCalls);
-    check('body payload reached target', after.lastPayload === 'PAYLOAD123',
-          JSON.stringify(after.lastPayload));
-
-    await new Promise(r => setTimeout(r, 100));
+    await pump(150);
     sock.destroy();
     console.log(failures === 0 ? 'E2E_ALL_PASS' : 'E2E_FAILURES=' + failures);
-    setTimeout(() => setTimeout(() => process.exit(failures === 0 ? 0 : 1), 150), 150);
+    setTimeout(() => process.exit(failures === 0 ? 0 : 1), 100);
 }
 
 main().catch(e => { console.error('error:', e.message); process.exit(1); });
