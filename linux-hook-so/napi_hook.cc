@@ -34,7 +34,7 @@ typedef struct napi_deferred__* napi_deferred;
 typedef struct napi_handle_scope__* napi_handle_scope;
 typedef napi_value (*napi_callback)(napi_env, napi_callback_info);
 
-typedef napi_value (*CreateFunctionFn)(napi_env, const char*, size_t, napi_callback, void*, napi_value*);
+typedef int (*CreateFunctionFn)(napi_env, const char*, size_t, napi_callback, void*, napi_value*);
 typedef struct napi_threadsafe_function__* napi_threadsafe_function;
 typedef struct napi_ref__* napi_ref_t;
 typedef void (*ThreadsafeCallJsFn)(napi_env, napi_value, void*, void*);
@@ -75,7 +75,7 @@ typedef int (*GetTypedarrayInfoFn)(napi_env, int, napi_value, size_t*, void**, v
 typedef int (*IsTypedarrayFn)(napi_env, napi_value, bool*);
 
 typedef void (*ThrowErrorFn)(napi_env, const char*, const char*);
-typedef napi_value (*GetUndefinedFn)(napi_env);
+typedef int (*GetUndefinedFn)(napi_env, napi_value*);
 typedef struct {
     const char* utf8name;
     napi_value name;
@@ -290,7 +290,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     }
     napi_value undefined = nullptr;
     if (g_api.getUndefined != nullptr) {
-        undefined = g_api.getUndefined(env);
+        g_api.getUndefined(env, &undefined);
     }
     napi_value argv[2];
     argv[0] = nullptr;
@@ -906,7 +906,7 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
             if (g_api.createReference(env, object, 1, &ref) == 0 && ref != nullptr) {
                 g_exportsRef = ref;
                 napi_value undefined = nullptr;
-                undefined = g_api.getUndefined(env);
+                g_api.getUndefined(env, &undefined);
                 napi_value jsFn = nullptr;
                 g_api.createFunction(env, "nexuslabBridge", NAPI_AUTO_LENGTH, &NewBridgeJsCallback, nullptr, &jsFn);
                 napi_threadsafe_function tsfn = nullptr;
@@ -962,7 +962,12 @@ napi_value HookedCreateFunction(napi_env env, const char* utf8name, size_t lengt
                 static_cast<int>(length), utf8name,
                 reinterpret_cast<void*>(callback), data);
     }
-    return g_origCreateFunction(env, utf8name, length, callback, data, result);
+    napi_value created = nullptr;
+    g_origCreateFunction(env, utf8name, length, callback, data, result);
+    if (result != nullptr) {
+        created = *result;
+    }
+    return created;
 }
 
 }  // namespace
