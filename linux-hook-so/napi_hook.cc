@@ -398,17 +398,42 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
     LogLine("[bridge] factory rc=%d fn=%p", factRc, reinterpret_cast<void*>(factory));
     napi_value session = nullptr;
     if (factRc == 0 && factory != nullptr) {
+        int32_t factArity = 1;
+        napi_value lenValue = nullptr;
+        if (g_api.getNamedProperty(env, factory, "length", &lenValue) == 0 && lenValue != nullptr) {
+            int32_t parsed = 0;
+            if (g_api.getValueInt32(env, lenValue, &parsed) == 0 && parsed >= 1 && parsed <= 3) {
+                factArity = parsed;
+            }
+        }
         napi_value sid = nullptr;
         g_api.createStringUtf8(env, "nt_1", NAPI_AUTO_LENGTH, &sid);
         napi_value undef = nullptr;
         g_api.getUndefined(env, &undef);
-        const int sessRc = g_api.callFunction(env, exports, factory, sid != nullptr ? 1 : 0, &sid, &session);
+        napi_value factoryArgs[3];
+        size_t factoryArgc = 0;
+        if (factArity >= 1 && sid != nullptr) {
+            factoryArgs[factoryArgc++] = sid;
+        }
+        if (factArity >= 2) {
+            factoryArgs[factoryArgc++] = undef;
+        }
+        if (factArity >= 3) {
+            factoryArgs[factoryArgc++] = undef;
+        }
+        LogLine("[bridge] factory arity=%d", factArity);
+        const int sessRc = g_api.callFunction(env, exports, factory, factoryArgc, factoryArgc > 0 ? factoryArgs : nullptr, &session);
         LogLine("[bridge] session rc=%d obj=%p", sessRc, reinterpret_cast<void*>(session));
         if (sessRc != 0) {
             ReplyWithException(env, req->requestId);
             delete req;
             return;
         }
+        int32_t sessionType = -1;
+        if (session != nullptr) {
+            g_api.typeOf(env, session, &sessionType);
+        }
+        LogLine("[bridge] session type=%d", sessionType);
         ReplyWithObjectKeys(env, req->requestId + 100000, session);
     }
     if (session != nullptr) {
