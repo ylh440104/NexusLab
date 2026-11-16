@@ -506,6 +506,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
             off += static_cast<size_t>(snprintf(buf + off, sizeof(buf) - off - 1, "%d:%s;", i, s.name));
         }
         LogLine("[bridge] names total=%d", total);
+        LogLine("[bridge] NAMELIST %s", buf);
         nexuslab_linux_hook_send_reply(req->requestId, 0, buf, static_cast<uint32_t>(off));
         delete req;
         return;
