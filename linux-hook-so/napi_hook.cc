@@ -49,6 +49,7 @@ typedef int (*CreateBufferCopyFn)(napi_env, size_t, const void*, void**, napi_va
 constexpr size_t NAPI_AUTO_LENGTH = static_cast<size_t>(-1);
 typedef int (*GetValueDoubleFnT)(napi_env, napi_value, double*);
 typedef int (*GetValueBoolFn)(napi_env, napi_value, bool*);
+typedef int (*GetPropertyNamesFn)(napi_env, napi_value, napi_value*);
 typedef int (*GetCbInfoFn)(napi_env, napi_callback_info, size_t*, napi_value*, napi_value*, void**);
 typedef int (*GetValueStringUtf8Fn)(napi_env, napi_value, char*, size_t, size_t*);
 typedef int (*TypeofFn)(napi_env, napi_value, int*);
@@ -132,6 +133,7 @@ struct NapiApi {
     CallFunctionFn callFunction = nullptr;
     CreateBufferCopyFn createBufferCopy = nullptr;
     GetUndefinedFn getUndefined = nullptr;
+    GetPropertyNamesFn getPropertyNames = nullptr;
     GetValueDoubleFnT getValueDoubleFn = nullptr;
     GetValueBoolFn getValueBool = nullptr;
     GetLastExceptionFn getLastException = nullptr;
@@ -197,6 +199,7 @@ bool LoadNapiApi() {
     NEXUS_BIND(callFunction, "napi_call_function")
     NEXUS_BIND(createBufferCopy, "napi_create_buffer_copy")
     NEXUS_BIND(getUndefined, "napi_get_undefined")
+    NEXUS_BIND(getPropertyNames, "napi_get_property_names")
     NEXUS_BIND(getValueDoubleFn, "napi_get_value_double")
     NEXUS_BIND(getLastException, "napi_get_and_clear_last_exception")
     NEXUS_BIND(coerceToString, "napi_coerce_to_string")
@@ -269,6 +272,33 @@ struct SendBridgeRequest {
     char cmd[256];
     std::string body;
 };
+
+void ReplyWithObjectKeys(napi_env env, uint32_t requestId, napi_value obj) {
+    char buf[2048];
+    size_t off = 0;
+    buf[0] = 0;
+    if (obj != nullptr && g_api.getPropertyNames != nullptr) {
+        napi_value names = nullptr;
+        if (g_api.getPropertyNames(env, obj, &names) == 0 && names != nullptr) {
+            uint32_t len = 0;
+            g_api.getArrayLength(env, names, &len);
+            for (uint32_t i = 0; i < len && off + 200 < sizeof(buf); ++i) {
+                napi_value item = nullptr;
+                g_api.getElement(env, names, i, &item);
+                if (item == nullptr) {
+                    continue;
+                }
+                char nm[120];
+                nm[0] = 0;
+                size_t n = 0;
+                g_api.getValueStringUtf8(env, item, nm, sizeof(nm) - 1, &n);
+                off += static_cast<size_t>(snprintf(buf + off, sizeof(buf) - off - 1, "%s;", nm));
+            }
+        }
+    }
+    LogLine("[bridge] keys reqId=%u keys=%s", requestId, buf);
+    nexuslab_linux_hook_send_reply(requestId, 0, buf, static_cast<uint32_t>(off));
+}
 
 void ReplyWithException(napi_env env, uint32_t requestId) {
     char text[1024];
@@ -363,12 +393,40 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
-    const int propRc = g_api.getNamedProperty(env, exports, "SendSSORequestInternal", &target);
-    if (propRc != 0 || target == nullptr) {
-        LogLine("[bridge] target property missing rc=%d", propRc);
-        nexuslab_linux_hook_send_reply(req->requestId, -3, "", 0);
-        delete req;
-        return;
+    napi_value factory = nullptr;
+    const int factRc = g_api.getNamedProperty(env, exports, "getNTWrapperSession", &factory);
+    LogLine("[bridge] factory rc=%d fn=%p", factRc, reinterpret_cast<void*>(factory));
+    napi_value session = nullptr;
+    if (factRc == 0 && factory != nullptr) {
+        napi_value sid = nullptr;
+        g_api.createStringUtf8(env, "nt_1", NAPI_AUTO_LENGTH, &sid);
+        napi_value undef = nullptr;
+        g_api.getUndefined(env, &undef);
+        const int sessRc = g_api.callFunction(env, exports, factory, sid != nullptr ? 1 : 0, &sid, &session);
+        LogLine("[bridge] session rc=%d obj=%p", sessRc, reinterpret_cast<void*>(session));
+        if (sessRc != 0) {
+            ReplyWithException(env, req->requestId);
+            delete req;
+            return;
+        }
+        ReplyWithObjectKeys(env, req->requestId + 100000, session);
+    }
+    if (session != nullptr) {
+        const int propRc = g_api.getNamedProperty(env, session, "sendSSORequest", &target);
+        LogLine("[bridge] sso prop rc=%d fn=%p", propRc, reinterpret_cast<void*>(target));
+        if (propRc != 0 || target == nullptr) {
+            nexuslab_linux_hook_send_reply(req->requestId, -3, "", 0);
+            delete req;
+            return;
+        }
+    } else {
+        const int propRc = g_api.getNamedProperty(env, exports, "SendSSORequestInternal", &target);
+        if (propRc != 0 || target == nullptr) {
+            LogLine("[bridge] target property missing rc=%d", propRc);
+            nexuslab_linux_hook_send_reply(req->requestId, -3, "", 0);
+            delete req;
+            return;
+        }
     }
     int32_t arity = 2;
     napi_value arityValue = nullptr;
