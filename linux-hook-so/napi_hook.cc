@@ -50,6 +50,8 @@ constexpr size_t NAPI_AUTO_LENGTH = static_cast<size_t>(-1);
 typedef int (*GetValueDoubleFnT)(napi_env, napi_value, double*);
 typedef int (*GetValueBoolFn)(napi_env, napi_value, bool*);
 typedef int (*GetPropertyNamesFn)(napi_env, napi_value, napi_value*);
+typedef int (*IsArrayFn)(napi_env, napi_value, bool*);
+typedef int (*GetPropertyFn)(napi_env, napi_value, napi_value, napi_value*);
 typedef int (*GetCbInfoFn)(napi_env, napi_callback_info, size_t*, napi_value*, napi_value*, void**);
 typedef int (*GetValueStringUtf8Fn)(napi_env, napi_value, char*, size_t, size_t*);
 typedef int (*TypeofFn)(napi_env, napi_value, int*);
@@ -133,6 +135,8 @@ struct NapiApi {
     CallFunctionFn callFunction = nullptr;
     CreateBufferCopyFn createBufferCopy = nullptr;
     GetUndefinedFn getUndefined = nullptr;
+    IsArrayFn isArray = nullptr;
+    GetPropertyFn getProperty = nullptr;
     GetPropertyNamesFn getPropertyNames = nullptr;
     GetValueDoubleFnT getValueDoubleFn = nullptr;
     GetValueBoolFn getValueBool = nullptr;
@@ -199,6 +203,8 @@ bool LoadNapiApi() {
     NEXUS_BIND(callFunction, "napi_call_function")
     NEXUS_BIND(createBufferCopy, "napi_create_buffer_copy")
     NEXUS_BIND(getUndefined, "napi_get_undefined")
+    NEXUS_BIND(isArray, "napi_is_array")
+    NEXUS_BIND(getProperty, "napi_get_property")
     NEXUS_BIND(getPropertyNames, "napi_get_property_names")
     NEXUS_BIND(getValueDoubleFn, "napi_get_value_double")
     NEXUS_BIND(getLastException, "napi_get_and_clear_last_exception")
@@ -773,6 +779,83 @@ void DumpCallArgs(napi_env env, napi_callback_info info) {
         }
     }
 }
+std::atomic<int> g_sessionCallDump{0};
+void* g_sessionOrigSend = nullptr;
+
+napi_value SessionSendProxy(napi_env env, napi_callback_info info) {
+    size_t argc = 8;
+    napi_value argv[8];
+    void* data = nullptr;
+    g_api.getCbInfo(env, info, &argc, argv, nullptr, &data);
+    const int seq = g_sessionCallDump.fetch_add(1);
+    if (seq < 30) {
+        LogLine("[session] sendSSORequest argc=%zu", argc);
+        for (size_t i = 0; i < argc && i < 8; ++i) {
+            int32_t t = -1;
+            g_api.typeOf(env, argv[i], &t);
+            if (t == 4) {
+                char s[256];
+                s[0] = 0;
+                size_t n = 0;
+                g_api.getValueStringUtf8(env, argv[i], s, sizeof(s) - 1, &n);
+                LogLine("[session]   [%zu] str=%.200s", i, s);
+            } else if (t == 3) {
+                double d = 0;
+                g_api.getValueDoubleFn(env, argv[i], &d);
+                LogLine("[session]   [%zu] num=%f", i, d);
+            } else if (t == 9) {
+                bool b = false;
+                g_api.getValueBool(env, argv[i], &b);
+                LogLine("[session]   [%zu] bool=%d", i, b ? 1 : 0);
+            } else if (t == 5) {
+                bool isArr = false;
+                g_api.isArray(env, argv[i], &isArr);
+                LogLine("[session]   [%zu] object isArray=%d", i, isArr ? 1 : 0);
+                napi_value names = nullptr;
+                if (g_api.getPropertyNames != nullptr && g_api.getPropertyNames(env, argv[i], &names) == 0 && names != nullptr) {
+                    uint32_t len = 0;
+                    g_api.getArrayLength(env, names, &len);
+                    LogLine("[session]   [%zu] keys=%u", i, len);
+                    for (uint32_t k = 0; k < len && k < 12; ++k) {
+                        napi_value nm = nullptr;
+                        g_api.getElement(env, names, k, &nm);
+                        char key[96];
+                        key[0] = 0;
+                        size_t kn = 0;
+                        if (nm != nullptr) {
+                            g_api.getValueStringUtf8(env, nm, key, sizeof(key) - 1, &kn);
+                        }
+                        napi_value val = nullptr;
+                        if (nm != nullptr) {
+                            g_api.getProperty(env, argv[i], nm, &val);
+                        }
+                        int32_t vt = -1;
+                        if (val != nullptr) {
+                            g_api.typeOf(env, val, &vt);
+                        }
+                        if (vt == 4) {
+                            char vs[160];
+                            vs[0] = 0;
+                            size_t vn = 0;
+                            g_api.getValueStringUtf8(env, val, vs, sizeof(vs) - 1, &vn);
+                            LogLine("[session]     .%s = str %.120s", key, vs);
+                        } else {
+                            LogLine("[session]     .%s = type %d", key, vt);
+                        }
+                    }
+                }
+            } else {
+                LogLine("[session]   [%zu] type=%d", i, t);
+            }
+        }
+    }
+    napi_callback orig = reinterpret_cast<napi_callback>(data != nullptr ? data : g_sessionOrigSend);
+    if (orig != nullptr) {
+        return orig(env, info);
+    }
+    return nullptr;
+}
+
 napi_value ProxyDispatchBySlot(int slotIndex, napi_env env, napi_callback_info info) {
     if (slotIndex < 0 || slotIndex >= kMaxCaptureSlots) {
         return nullptr;
@@ -795,7 +878,16 @@ napi_value ProxyDispatchBySlot(int slotIndex, napi_env env, napi_callback_info i
             if (g_api.createReference(env, out, 1, &fresh) == 0 && fresh != nullptr) {
                 g_sessionRef = fresh;
                 LogLine("[proxy] session captured from %s", slot.name);
-                ReplyWithObjectKeys(env, 999999, out);
+                napi_value sendFn = nullptr;
+                if (g_api.getNamedProperty != nullptr && g_api.getNamedProperty(env, out, "sendSSORequest", &sendFn) == 0 && sendFn != nullptr) {
+                    napi_value proxyFn = nullptr;
+                    if (g_api.createFunction(env, "sendSSORequestProxy", NAPI_AUTO_LENGTH, &SessionSendProxy, reinterpret_cast<void*>(sendFn), &proxyFn) == 0 && proxyFn != nullptr) {
+                        const int setRc = g_api.setNamedProperty(env, out, "sendSSORequest", proxyFn);
+                        LogLine("[proxy] sendSSORequest wrapped rc=%d", setRc);
+                    }
+                } else {
+                    LogLine("[proxy] sendSSORequest not found on session");
+                }
             }
         }
     }
