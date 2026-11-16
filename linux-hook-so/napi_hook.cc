@@ -1037,10 +1037,10 @@ int HookedDefineProperties(napi_env env, napi_value object, size_t count,
     return g_origDefineProperties(env, object, count, descriptors);
 }
 
-napi_value HookedCreateFunction(napi_env env, const char* utf8name, size_t length,
-                                napi_callback callback, void* data, napi_value* result) {
+int HookedCreateFunction(napi_env env, const char* utf8name, size_t length,
+                         napi_callback callback, void* data, napi_value* result) {
     if (g_origCreateFunction == nullptr) {
-        return nullptr;
+        return 1;
     }
     if (utf8name != nullptr && IsInterestingName(utf8name, length)) {
         std::lock_guard<std::mutex> guard(g_nameMutex);
@@ -1053,12 +1053,7 @@ napi_value HookedCreateFunction(napi_env env, const char* utf8name, size_t lengt
                 static_cast<int>(length), utf8name,
                 reinterpret_cast<void*>(callback), data);
     }
-    napi_value created = nullptr;
-    g_origCreateFunction(env, utf8name, length, callback, data, result);
-    if (result != nullptr) {
-        created = *result;
-    }
-    return created;
+    return g_origCreateFunction(env, utf8name, length, callback, data, result);
 }
 
 }  // namespace
