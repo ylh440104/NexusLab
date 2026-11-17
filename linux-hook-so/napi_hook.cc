@@ -390,13 +390,70 @@ void ReplyWithException(napi_env env, uint32_t requestId) {
 }
 
 void ReplyWithValue(napi_env env, uint32_t requestId, napi_value value, int32_t status) {
+    if (value != nullptr && g_api.isBuffer != nullptr && g_api.getBufferInfo != nullptr) {
+        bool isBuf = false;
+        if (g_api.isBuffer(env, value, &isBuf) == 0 && isBuf) {
+            void* data = nullptr;
+            size_t size = 0;
+            if (g_api.getBufferInfo(env, value, &data, &size) == 0 && data != nullptr) {
+                LogLine("[bridge] reply reqId=%u status=%d buffer=%zu", requestId, status, size);
+                nexuslab_linux_hook_send_reply(requestId, status, static_cast<const char*>(data), static_cast<uint32_t>(size));
+                return;
+            }
+        }
+    }
     char buf[1024];
     buf[0] = 0;
     size_t len = 0;
-    if (value != nullptr && g_api.getValueStringUtf8 != nullptr) {
-        g_api.getValueStringUtf8(env, value, buf, sizeof(buf) - 1, &len);
+    int32_t vtype = -1;
+    if (value != nullptr && g_api.typeOf != nullptr) {
+        g_api.typeOf(env, value, &vtype);
     }
-    LogLine("[bridge] reply reqId=%u status=%d body=%s", requestId, status, buf);
+    if (vtype == 5 && value != nullptr && g_api.getPropertyNames != nullptr && g_api.getArrayLength != nullptr) {
+        napi_value names = nullptr;
+        uint32_t keys = 0;
+        if (g_api.getPropertyNames(env, value, &names) == 0 && names != nullptr) {
+            g_api.getArrayLength(env, names, &keys);
+        }
+        int written = snprintf(buf, sizeof(buf), "{object keys=%u:", keys);
+        if (written > 0) {
+            len = static_cast<size_t>(written);
+        }
+        for (uint32_t k = 0; k < keys && len + 90 < sizeof(buf); ++k) {
+            napi_value nm = nullptr;
+            napi_value val = nullptr;
+            char key[48];
+            key[0] = 0;
+            size_t kn = 0;
+            if (g_api.getElement != nullptr) {
+                g_api.getElement(env, names, k, &nm);
+            }
+            if (nm != nullptr && g_api.getValueStringUtf8 != nullptr) {
+                g_api.getValueStringUtf8(env, nm, key, sizeof(key) - 1, &kn);
+            }
+            int32_t vt = -1;
+            if (nm != nullptr && g_api.getProperty != nullptr) {
+                g_api.getProperty(env, value, nm, &val);
+            }
+            if (val != nullptr && g_api.typeOf != nullptr) {
+                g_api.typeOf(env, val, &vt);
+            }
+            const int wrote = snprintf(buf + len, sizeof(buf) - len, "%s=t%d;", key, vt);
+            if (wrote > 0) {
+                len += static_cast<size_t>(wrote);
+            }
+        }
+        if (len + 2 < sizeof(buf)) {
+            buf[len++] = '}';
+            buf[len] = 0;
+        }
+    } else if (value != nullptr && g_api.coerceToString != nullptr) {
+        napi_value asStr = nullptr;
+        if (g_api.coerceToString(env, value, &asStr) == 0 && asStr != nullptr && g_api.getValueStringUtf8 != nullptr) {
+            g_api.getValueStringUtf8(env, asStr, buf, sizeof(buf) - 1, &len);
+        }
+    }
+    LogLine("[bridge] reply reqId=%u status=%d type=%d body=%.300s", requestId, status, vtype, buf);
     nexuslab_linux_hook_send_reply(requestId, status, buf, static_cast<uint32_t>(len));
 }
 
