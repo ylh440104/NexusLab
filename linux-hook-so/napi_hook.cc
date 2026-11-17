@@ -658,6 +658,74 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
+    if (strcmp(req->cmd, "__try2") == 0) {
+        const int shape = (req->body.empty() ? 0 : (req->body[0] - '0'));
+        char diag[1200];
+        size_t off = 0;
+        diag[0] = 0;
+        const int pairs = g_ssoPairCount.load();
+        off += static_cast<size_t>(snprintf(diag + off, sizeof(diag) - off - 1, "pairs=%d shape=%d|", pairs, shape));
+        if (pairs < 1) {
+            nexuslab_linux_hook_send_reply(req->requestId, -1, diag, static_cast<uint32_t>(strlen(diag)));
+            delete req;
+            return;
+        }
+        napi_value owner = nullptr;
+        napi_value fn = nullptr;
+        g_api.getReferenceValue(env, g_ssoPairs[0].ownerRef, &owner);
+        g_api.getReferenceValue(env, g_ssoPairs[0].fnRef, &fn);
+        int32_t ownerType = -1;
+        int32_t fnType = -1;
+        if (owner != nullptr) { g_api.typeOf(env, owner, &ownerType); }
+        if (fn != nullptr) { g_api.typeOf(env, fn, &fnType); }
+        off += static_cast<size_t>(snprintf(diag + off, sizeof(diag) - off - 1, "ownerT=%d fnT=%d|", ownerType, fnType));
+        if (fnType != 7) {
+            off += static_cast<size_t>(snprintf(diag + off, sizeof(diag) - off - 1, "not-a-function"));
+            nexuslab_linux_hook_send_reply(req->requestId, -2, diag, static_cast<uint32_t>(strlen(diag)));
+            delete req;
+            return;
+        }
+        napi_value obj = nullptr;
+        napi_value buf = nullptr;
+        napi_value str = nullptr;
+        g_api.createObject(env, &obj);
+        g_api.createBufferCopy(env, 4, "\x08\x01\x12\x00", nullptr, &buf);
+        g_api.createStringUtf8(env, "trpc.qqhealth_report.HealthReport.WriteHealthReport", NAPI_AUTO_LENGTH, &str);
+        napi_value argv[2];
+        size_t argc = 0;
+        const char* label = "";
+        if (shape == 0) { label = "str+buf"; argv[0] = str; argv[1] = buf; argc = 2; }
+        else if (shape == 1) { label = "str"; argv[0] = str; argc = 1; }
+        else if (shape == 2) { label = "buf"; argv[0] = buf; argc = 1; }
+        else if (shape == 3) { label = "obj{}";  argv[0] = obj; argc = 1; }
+        else if (shape == 4) { label = "noargs"; argc = 0; }
+        else {
+            label = "obj{cmd,body}";
+            g_api.setNamedProperty(env, obj, "cmd", str);
+            g_api.setNamedProperty(env, obj, "body", buf);
+            argv[0] = obj;
+            argc = 1;
+        }
+        napi_value out = nullptr;
+        const int rc = g_api.callFunction(env, owner, fn, argc, argc > 0 ? argv : nullptr, &out);
+        char ex[400];
+        ex[0] = 0;
+        napi_value exc = nullptr;
+        if (g_api.getLastException != nullptr && g_api.getLastException(env, &exc) == 0 && exc != nullptr) {
+            napi_value es = nullptr;
+            if (g_api.coerceToString != nullptr && g_api.coerceToString(env, exc, &es) == 0 && es != nullptr) {
+                size_t n = 0;
+                g_api.getValueStringUtf8(env, es, ex, sizeof(ex) - 1, &n);
+            }
+        }
+        int32_t outType = -1;
+        if (out != nullptr) { g_api.typeOf(env, out, &outType); }
+        off += static_cast<size_t>(snprintf(diag + off, sizeof(diag) - off - 1, "%s rc=%d outT=%d exc=%.200s", label, rc, outType, ex));
+        LogLine("[try2] %s", diag);
+        nexuslab_linux_hook_send_reply(req->requestId, 0, diag, static_cast<uint32_t>(strlen(diag)));
+        delete req;
+        return;
+    }
     if (strcmp(req->cmd, "__try") == 0) {
         char diag[2048];
         size_t off = 0;
