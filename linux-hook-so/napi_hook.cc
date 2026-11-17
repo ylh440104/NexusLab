@@ -958,17 +958,24 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         delete req;
         return;
     }
-    napi_value target2 = nullptr;
-    {
-        const int propRc = g_api.getNamedProperty(env, session, "sendSSORequest", &target2);
-        LogLine("[bridge] sso prop rc=%d fn=%p", propRc, reinterpret_cast<void*>(target2));
-        if (propRc != 0 || target2 == nullptr) {
+    napi_value callTarget = nullptr;
+    napi_value callOwner = nullptr;
+    if (g_ssoPairCount.load() >= 1 && g_api.getReferenceValue != nullptr) {
+        g_api.getReferenceValue(env, g_ssoPairs[0].ownerRef, &callOwner);
+        g_api.getReferenceValue(env, g_ssoPairs[0].fnRef, &callTarget);
+        LogLine("[bridge] using sso pair owner=%p fn=%p", reinterpret_cast<void*>(callOwner), reinterpret_cast<void*>(callTarget));
+    }
+    if (callTarget == nullptr) {
+        const int propRc = g_api.getNamedProperty(env, session, "sendSSORequest", &callTarget);
+        LogLine("[bridge] sso prop rc=%d fn=%p", propRc, reinterpret_cast<void*>(callTarget));
+        if (propRc != 0 || callTarget == nullptr) {
             ReplyWithObjectKeys(env, req->requestId, session);
             delete req;
             return;
         }
+        callOwner = session;
     }
-    target = target2;
+    target = callTarget;
     int32_t arity = 2;
     napi_value arityValue = nullptr;
     if (g_api.getNamedProperty(env, target, "length", &arityValue) == 0 && arityValue != nullptr) {
@@ -1001,7 +1008,7 @@ void BridgeCallJs(napi_env env, napi_value jsCb, void* context, void* data) {
         callArgs[callArgc++] = undefined;
     }
     napi_value result = nullptr;
-    const int rc = g_api.callFunction(env, exports, target, callArgc, callArgs, &result);
+    const int rc = g_api.callFunction(env, callOwner != nullptr ? callOwner : exports, target, callArgc, callArgs, &result);
     LogLine("[bridge] call rc=%d argc=%zu", rc, callArgc);
     if (rc != 0) {
         LogLine("[bridge] call failed rc=%d argc=%zu", rc, callArgc);
